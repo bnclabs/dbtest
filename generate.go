@@ -92,7 +92,6 @@ func Generateupdate(
 	klen, vlen, loadn, seedl, seedc int64) func(k, v []byte) ([]byte, []byte) {
 
 	var textint [16]byte
-	var keynum int64
 
 	rndl := rand.New(rand.NewSource(seedl))
 	rndc := rand.New(rand.NewSource(seedc))
@@ -130,20 +129,28 @@ func Generateread(klen, loadn, seedl, seedc int64) func([]byte) []byte {
 	}
 }
 
-func Generatedelete(klen, loadn, seedl, seedc int64) func([]byte) []byte {
+func Generatedelete(
+	klen, vlen,
+	loadn, seedl, seedc int64) func(k, v []byte) ([]byte, []byte) {
+
 	var textint [16]byte
 
 	rndl := rand.New(rand.NewSource(seedl))
 	rndc := rand.New(rand.NewSource(seedc))
 	keynum, lcount := int64(0), int64(0)
 
-	return func(key []byte) []byte {
-		key = Fixbuffer(key, int64(klen))
-		copy(key, zeros)
+	return func(key, value []byte) ([]byte, []byte) {
 		keynum, lcount, rndl = getkey(rndl, rndc, seedl, lcount, loadn, 1)
 		ascii := strconv.AppendInt(textint[:0], int64(keynum), 10)
+		// create key
+		key = Fixbuffer(key, int64(klen))
+		copy(key, zeros)
 		copy(key[klen-int64(len(ascii)):klen], ascii)
-		return key
+		// create value
+		value = Fixbuffer(value, int64(vlen))
+		copy(value, zeros)
+		copy(value[vlen-int64(len(ascii)):vlen], ascii)
+		return key, value
 	}
 }
 
