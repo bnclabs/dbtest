@@ -5,13 +5,18 @@ import "fmt"
 import "sync"
 import "time"
 import "bytes"
+import "runtime"
+import "strconv"
 import "sync/atomic"
+import "math/rand"
 
 import "github.com/prataprc/golog"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 
+var ncreates int64
 var numentries int64
 var totalwrites int64
+var delrem = int64(2)
 
 func testlmdb() error {
 	options.path = lmdbpath()
@@ -28,26 +33,30 @@ func testlmdb() error {
 	defer env.Close()
 
 	seedl, seedc := int64(options.seed), int64(options.seed)+100
-	fmt.Printf("Seeds load: %v, ops: %v\n", seedl, seedc)
+	fmt.Printf("Seed for load: %v, for ops: %v\n", seedl, seedc)
 	if err = lmdbLoad(env, dbi, seedl); err != nil {
 		return err
 	}
 
-	var wg sync.WaitGroup
+	var wwg, rwg sync.WaitGroup
 	// writer routines
 	n := atomic.LoadInt64(&numentries)
-	go lmdbCreater(env, dbi, n, seedc, &wg)
-	go lmdbUpdater(env, dbi, n, seedl, seedc, &wg)
-	go lmdbDeleter(env, dbi, n, seedl, seedc, &wg)
-	wg.Add(3)
+	go lmdbCreater(env, dbi, n, seedc, &wwg)
+	go lmdbUpdater(env, dbi, n, seedl, seedc, &wwg)
+	go lmdbDeleter(env, dbi, n, seedl, seedc, &wwg)
+	wwg.Add(3)
 	// reader routines
-	//fin := make(chan struct{})
-	//for i := 0; i < runtime.GOMAXPROCS(-1); i++ {
-	//	go lmdbGetter(n, seedl, seedc, fin, &wg)
-	//	go lmdbRanger(n, seedl, seedc, fin, &wg)
-	//	wg.Add(2)
-	//}
-	wg.Wait()
+	fin := make(chan struct{})
+	for i := 0; i < runtime.GOMAXPROCS(-1); i++ {
+		go lmdbGetter(n, seedl, seedc, fin, &rwg)
+		go lmdbRanger(n, seedl, seedc, fin, &rwg)
+		rwg.Add(2)
+	}
+	wwg.Wait()
+	close(fin)
+	rwg.Wait()
+
+	fmt.Printf("LMDB total indexed %v items\n", getlmdbCount(env, dbi))
 
 	return nil
 }
@@ -101,6 +110,8 @@ func initlmdb(envflags uint) (env *lmdb.Env, dbi lmdb.DBI, err error) {
 }
 
 func readlmdb(envflags uint) (*lmdb.Env, lmdb.DBI, error) {
+	time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
+
 	var dbi lmdb.DBI
 
 	env, err := lmdb.NewEnv()
@@ -143,10 +154,16 @@ func lmdbLoad(env *lmdb.Env, dbi lmdb.DBI, seedl int64) error {
 
 	klen, vlen := int64(options.keylen), int64(options.keylen)
 	n := int64(options.entries / 2)
+	if n > 1000000 {
+		n = 1000000
+	}
 	g := Generateloadr(klen, vlen, n, int64(seedl))
 
 	populate := func(txn *lmdb.Txn) (err error) {
 		key, value = g(key, value)
+		//if "00000000000000000000000000699067" == string(key) {
+		//	fmt.Println("load", string(key))
+		//}
 		for ; key != nil; key, value = g(key, value) {
 			if err := txn.Put(dbi, key, value, 0); err != nil {
 				return err
@@ -170,20 +187,26 @@ func lmdbCreater(
 
 	defer wg.Done()
 
-	var ncreates int64
 	var key, value []byte
 	klen, vlen := int64(options.keylen), int64(options.keylen)
 	g := Generatecreate(klen, vlen, n, seedc)
 
 	put := func(txn *lmdb.Txn) (err error) {
+		//if "00000000000000000000000000699067" == string(key) {
+		//	fmt.Println("create", string(key))
+		//}
 		if err := txn.Put(dbi, key, value, 0); err != nil {
 			return err
 		}
 		return nil
 	}
 
-	now := time.Now()
+	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
+	//entries := int64(float64(options.entries) * 1.1)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+		//if atomic.LoadInt64(&numentries) > entries {
+		//	time.Sleep(1000 * time.Microsecond)
+		//}
 		key, value = g(key, value)
 		if err := env.Update(put); err != nil {
 			log.Errorf("key %q err : %v", key, err)
@@ -191,13 +214,15 @@ func lmdbCreater(
 		}
 		atomic.AddInt64(&numentries, 1)
 		atomic.AddInt64(&totalwrites, 1)
-		if ncreates = ncreates + 1; ncreates%100000 == 0 {
-			fmsg := "lmdbCreated %v entries in %v\n"
-			fmt.Printf(fmsg, ncreates, time.Since(now))
+		if nc := atomic.AddInt64(&ncreates, 1); nc%markercount == 0 {
+			x, y := time.Since(now), time.Since(epoch)
+			fmsg := "lmdbCreated {%v items in %v} {%v items in %v}\n"
+			fmt.Printf(fmsg, markercount, x, nc, y)
 			now = time.Now()
 		}
 	}
-	fmt.Printf("at exit, lmdbCreated %v entries\n", ncreates)
+	fmsg := "at exit, lmdbCreated %v items in %v\n"
+	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), time.Since(epoch))
 }
 
 func lmdbUpdater(
@@ -211,13 +236,16 @@ func lmdbUpdater(
 	g := Generateupdate(klen, vlen, n, seedl, seedc)
 
 	update := func(txn *lmdb.Txn) (err error) {
+		//if "00000000000000000000000000699067" == string(key) {
+		//	fmt.Println("update", string(key), string(value))
+		//}
 		if err := txn.Put(dbi, key, value, 0); err != nil {
 			return err
 		}
 		return nil
 	}
 
-	now := time.Now()
+	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		key, value = g(key, value)
 		if err := env.Update(update); err != nil {
@@ -225,13 +253,15 @@ func lmdbUpdater(
 			return
 		}
 		atomic.AddInt64(&totalwrites, 1)
-		if nupdates = nupdates + 1; nupdates%100000 == 0 {
-			fmsg := "lmdbUpdated %v entries in %v\n"
-			fmt.Printf(fmsg, nupdates, time.Since(now))
+		if nupdates = nupdates + 1; nupdates%markercount == 0 {
+			x, y := time.Since(now), time.Since(epoch)
+			fmsg := "lmdbUpdated {%v items in %v} {%v items in %v}\n"
+			fmt.Printf(fmsg, markercount, x, nupdates, y)
 			now = time.Now()
 		}
 	}
-	fmt.Printf("at exit, lmdbUpdated %v entries\n", nupdates)
+	fmsg := "at exit, lmdbUpdated %v items in %v\n"
+	fmt.Printf(fmsg, nupdates, time.Since(epoch))
 }
 
 func lmdbDeleter(
@@ -242,17 +272,24 @@ func lmdbDeleter(
 	var xdeletes, ndeletes int64
 	var key, value []byte
 	klen, vlen := int64(options.keylen), int64(options.keylen)
-	g := Generatedelete(klen, vlen, n, seedl, seedc)
+	g := Generatedelete(klen, vlen, n, seedl, seedc, delrem)
 
 	delete := func(txn *lmdb.Txn) (err error) {
+		//if "00000000000000000000000000699067" == string(key) {
+		//	fmt.Println("delete", string(key))
+		//}
 		if err := txn.Del(dbi, key, nil); err != nil {
 			return err
 		}
 		return nil
 	}
 
-	now := time.Now()
+	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
+	//entries := int64(float64(options.entries) * 1.1)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+		//if atomic.LoadInt64(&numentries) < entries {
+		//	time.Sleep(1000 * time.Microsecond)
+		//}
 		key, value = g(key, value)
 		if err := env.Update(delete); err != nil {
 			//log.Infof("key %q err : %v", key, err)
@@ -262,13 +299,15 @@ func lmdbDeleter(
 			atomic.AddInt64(&numentries, -1)
 			atomic.AddInt64(&totalwrites, 1)
 		}
-		if ndeletes%100000 == 0 {
-			fmsg := "lmdbDeleted %v entries (x:%v) in %v\n"
-			fmt.Printf(fmsg, ndeletes, xdeletes, time.Since(now))
+		if (ndeletes+xdeletes)%markercount == 0 {
+			x, y := time.Since(now), time.Since(epoch)
+			fmsg := "lmdbDeleted {%v items in %v} {%v:%v items in %v}\n"
+			fmt.Printf(fmsg, markercount, x, ndeletes, xdeletes, y)
 			now = time.Now()
 		}
 	}
-	fmt.Printf("at exit, lmdbDeleter %v entries\n", ndeletes)
+	fmsg := "at exit, lmdbDeleter %v:%v items in %v\n"
+	fmt.Printf(fmsg, ndeletes, xdeletes, time.Since(epoch))
 }
 
 func lmdbGetter(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
@@ -278,31 +317,54 @@ func lmdbGetter(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
 		return
 	}
 	defer env.Close()
+
+	time.Sleep(time.Duration(rand.Intn(1000)+3000) * time.Millisecond)
+
+	var ngets, nmisses int64
 	var key []byte
 	g := Generateread(int64(options.keylen), n, seedl, seedc)
 
 	get := func(txn *lmdb.Txn) (err error) {
+		ngets++
 		value, err := txn.Get(dbi, key)
-		if err != nil {
-			return err
-		} else if bytes.Compare(key, value) != 0 {
-			return fmt.Errorf("expected %q, got %q", key, value)
+		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
+			panic(xerr)
+		} else if (int64(x) % delrem) != 0 {
+			if err != nil {
+				return err
+			} else if bytes.Compare(key, value) != 0 {
+				return fmt.Errorf("expected %q, got %q", key, value)
+			}
+		} else {
+			nmisses++
 		}
 		return nil
 	}
 
+	epoch, now, markercount := time.Now(), time.Now(), int64(10000000)
+loop:
 	for {
-		key = g(key)
+		key = g(key, atomic.LoadInt64(&ncreates))
 		if err := env.View(get); err != nil {
 			log.Errorf("%q err: %v", key, err)
-			return
+			break loop
 		}
 		select {
 		case <-fin:
-			return
+			break loop
 		default:
 		}
+		if ngets%markercount == 0 {
+			x, y := time.Since(now), time.Since(epoch)
+			fmsg := "lmdbGetter {%v items in %v} {%v:%v items in %v}\n"
+			fmt.Printf(fmsg, markercount, x, ngets, nmisses, y)
+			now = time.Now()
+		}
 	}
+	duration := time.Since(epoch)
+	<-fin
+	fmsg := "at exit, lmdbGetter %v:%v items in %v\n"
+	fmt.Printf(fmsg, ngets, nmisses, duration)
 }
 
 func lmdbRanger(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
@@ -312,6 +374,10 @@ func lmdbRanger(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
 		return
 	}
 	defer env.Close()
+
+	time.Sleep(time.Duration(rand.Intn(1000)+3000) * time.Millisecond)
+
+	var nranges, nmisses int64
 	var key []byte
 	g := Generateread(int64(options.keylen), n, seedl, seedc)
 
@@ -324,33 +390,44 @@ func lmdbRanger(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
 		defer cur.Close()
 
 		_, value, err := cur.Get(key, nil, 0)
-		if err != nil {
-			return err
-		} else if bytes.Compare(key, value) != 0 {
-			return fmt.Errorf("expected %q, got %q", key, value)
-		}
 		for i := 0; i < 100; i++ {
-			if key, value, err = cur.Get(nil, nil, lmdb.Next); err != nil {
-				return err
-			} else if bytes.Compare(key, value) != 0 {
-				return fmt.Errorf("expected %q, got %q", key, value)
+			nranges++
+			key, value, err = cur.Get(nil, nil, lmdb.Next)
+			if lmdb.IsNotFound(err) {
+				return nil
+			} else if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
+				panic(xerr)
+			} else if (int64(x) % delrem) != 0 {
+				if err != nil {
+					return err
+				} else if bytes.Compare(key, value) != 0 {
+					return fmt.Errorf("expected %q, got %q", key, value)
+				}
+			} else {
+				nmisses++
 			}
 		}
 		return nil
 	}
 
+	epoch := time.Now()
+loop:
 	for {
-		key = g(key)
+		key = g(key, atomic.LoadInt64(&ncreates))
 		if err := env.View(ranger); err != nil {
 			log.Errorf("%q err: %v", key, err)
-			return
+			break loop
 		}
 		select {
 		case <-fin:
-			return
+			break loop
 		default:
 		}
 	}
+	duration := time.Since(epoch)
+	<-fin
+	fmsg := "at exit, lmdbRanger %v:%v items in %v\n"
+	fmt.Printf(fmsg, nranges, nmisses, duration)
 }
 
 func lmdbpath() string {
@@ -361,4 +438,19 @@ func lmdbpath() string {
 		panic(err)
 	}
 	return options.path
+}
+
+func getlmdbCount(env *lmdb.Env, dbi lmdb.DBI) (count uint64) {
+	err := env.Update(func(txn *lmdb.Txn) (err error) {
+		stat, err := txn.Stat(dbi)
+		if err != nil {
+			return err
+		}
+		count = stat.Entries
+		return nil
+	})
+	if err != nil {
+		panic(err)
+	}
+	return
 }

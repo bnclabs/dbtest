@@ -93,12 +93,28 @@ func Generateupdate(
 
 	var textint [16]byte
 
+	loadn1 := loadn * rndscale
+	intn := int64(9223372036854775807) - loadn1
 	rndl := rand.New(rand.NewSource(seedl))
 	rndc := rand.New(rand.NewSource(seedc))
 	keynum, lcount := int64(0), int64(0)
 
+	getkey := func() {
+		if lcount < loadn { // from load pool, headstart
+			keynum = int64(rndl.Intn(int(loadn1)))
+		} else if (lcount % 3) == 0 { // from create pool
+			keynum = loadn1 + int64(rndc.Intn(int(intn)))
+		} else { // from load pool
+			keynum = int64(rndl.Intn(int(loadn1)))
+		}
+		lcount++
+		if lcount >= loadn && (lcount%loadn) == 0 {
+			rndl = rand.New(rand.NewSource(seedl))
+		}
+	}
+
 	return func(key, value []byte) ([]byte, []byte) {
-		keynum, lcount, rndl = getkey(rndl, rndc, seedl, lcount, loadn, 0)
+		getkey()
 		ascii := strconv.AppendInt(textint[:0], int64(keynum), 10)
 		// create key
 		key = Fixbuffer(key, int64(klen))
@@ -112,17 +128,34 @@ func Generateupdate(
 	}
 }
 
-func Generateread(klen, loadn, seedl, seedc int64) func([]byte) []byte {
+func Generateread(klen, loadn, seedl, seedc int64) func([]byte, int64) []byte {
 	var textint [16]byte
 
+	loadn1 := loadn * rndscale
+	intn := int64(9223372036854775807) - loadn1
 	rndl := rand.New(rand.NewSource(seedl))
 	rndc := rand.New(rand.NewSource(seedc))
 	keynum, lcount := int64(0), int64(0)
 
-	return func(key []byte) []byte {
+	getkey := func(mod int64) {
+		if lcount < loadn { // from load pool, headstart
+			keynum = int64(rndl.Intn(int(loadn1)))
+		} else if mod > 0 && (lcount%mod) != 0 { // from create pool
+			keynum = loadn1 + int64(rndc.Intn(int(intn)))
+		} else { // from load pool
+			keynum = int64(rndl.Intn(int(loadn1)))
+		}
+		lcount++
+		if lcount >= loadn && (lcount%loadn) == 0 {
+			rndl = rand.New(rand.NewSource(seedl))
+			rndc = rand.New(rand.NewSource(seedc))
+		}
+	}
+
+	return func(key []byte, ncreates int64) []byte {
+		getkey(ncreates / loadn)
 		key = Fixbuffer(key, int64(klen))
 		copy(key, zeros)
-		keynum, lcount, rndl = getkey(rndl, rndc, seedl, lcount, loadn, 0)
 		ascii := strconv.AppendInt(textint[:0], int64(keynum), 10)
 		copy(key[klen-int64(len(ascii)):klen], ascii)
 		return key
@@ -131,16 +164,36 @@ func Generateread(klen, loadn, seedl, seedc int64) func([]byte) []byte {
 
 func Generatedelete(
 	klen, vlen,
-	loadn, seedl, seedc int64) func(k, v []byte) ([]byte, []byte) {
+	loadn, seedl, seedc, rem int64) func(k, v []byte) ([]byte, []byte) {
 
 	var textint [16]byte
+	var getkey func()
 
+	loadn1 := loadn * rndscale
+	intn := int64(9223372036854775807) - loadn1
 	rndl := rand.New(rand.NewSource(seedl))
 	rndc := rand.New(rand.NewSource(seedc))
 	keynum, lcount := int64(0), int64(0)
 
+	getkey = func() {
+		if lcount < loadn { // from load pool, headstart
+			keynum = int64(rndl.Intn(int(loadn1)))
+		} else if (lcount % 3) == 0 { // from create pool
+			keynum = loadn1 + int64(rndc.Intn(int(intn)))
+		} else { // from load pool
+			keynum = int64(rndl.Intn(int(loadn1)))
+		}
+		lcount++
+		if lcount >= loadn && (lcount%loadn) == 0 {
+			rndl = rand.New(rand.NewSource(seedl))
+		}
+		if (keynum % rem) != 0 {
+			getkey()
+		}
+	}
+
 	return func(key, value []byte) ([]byte, []byte) {
-		keynum, lcount, rndl = getkey(rndl, rndc, seedl, lcount, loadn, 1)
+		getkey()
 		ascii := strconv.AppendInt(textint[:0], int64(keynum), 10)
 		// create key
 		key = Fixbuffer(key, int64(klen))
@@ -152,31 +205,6 @@ func Generatedelete(
 		copy(value[vlen-int64(len(ascii)):vlen], ascii)
 		return key, value
 	}
-}
-
-func getkey(
-	rndl, rndc *rand.Rand,
-	seedl, lcount, loadn, rem int64) (int64, int64, *rand.Rand) {
-
-	var keynum int64
-
-	loadn1 := loadn * rndscale
-	intn := int64(9223372036854775807) - loadn1
-	if lcount < loadn { // from load pool, headstart
-		keynum = int64(rndl.Intn(int(loadn1)))
-	} else if (lcount % 3) == 0 { // from create pool
-		keynum = loadn1 + int64(rndc.Intn(int(intn)))
-	} else { // from load pool
-		keynum = int64(rndl.Intn(int(loadn1)))
-	}
-	lcount++
-	if lcount >= loadn && (lcount%loadn) == 0 {
-		rndl = rand.New(rand.NewSource(seedl))
-	}
-	if (keynum % 2) != rem {
-		return getkey(rndl, rndc, seedl, lcount, loadn, rem)
-	}
-	return keynum, lcount, rndl
 }
 
 var rndscale = int64(3)
