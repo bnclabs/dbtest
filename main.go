@@ -7,6 +7,8 @@ import _ "net/http/pprof"
 
 import "github.com/prataprc/golog"
 
+// TODO: add Validate for llrb and mvcc.
+
 var options struct {
 	db      string
 	path    string
