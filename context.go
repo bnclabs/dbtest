@@ -6,3 +6,4 @@ var totalwrites int64
 var delmod = int64(0)
 var updmod = int64(1)
 var conflicts = int64(0)
+var rollbacks = int64(0)

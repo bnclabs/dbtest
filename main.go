@@ -40,5 +40,7 @@ func main() {
 		testlmdb()
 	case "llrb":
 		testllrb()
+	case "mvcc":
+		testmvcc()
 	}
 }
