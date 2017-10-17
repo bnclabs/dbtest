@@ -2,6 +2,10 @@ package main
 
 import "os"
 import "flag"
+import "net/http"
+import _ "net/http/pprof"
+
+import "github.com/prataprc/golog"
 
 var options struct {
 	db      string
@@ -27,8 +31,14 @@ func optparse(args []string) {
 func main() {
 	optparse(os.Args[1:])
 
+	go func() {
+		log.Infof("%v", http.ListenAndServe("localhost:6060", nil))
+	}()
+
 	switch options.db {
 	case "lmdb":
 		testlmdb()
+	case "llrb":
+		testllrb()
 	}
 }

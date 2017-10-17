@@ -89,9 +89,11 @@ func Generatecreate(
 }
 
 func Generateupdate(
-	klen, vlen, loadn, seedl, seedc int64) func(k, v []byte) ([]byte, []byte) {
+	klen, vlen, loadn,
+	seedl, seedc, mod int64) func(k, v []byte) ([]byte, []byte) {
 
 	var textint [16]byte
+	var getkey func()
 
 	loadn1 := loadn * rndscale
 	intn := int64(9223372036854775807) - loadn1
@@ -99,7 +101,7 @@ func Generateupdate(
 	rndc := rand.New(rand.NewSource(seedc))
 	keynum, lcount := int64(0), int64(0)
 
-	getkey := func() {
+	getkey = func() {
 		if lcount < loadn { // from load pool, headstart
 			keynum = int64(rndl.Intn(int(loadn1)))
 		} else if (lcount % 3) == 0 { // from create pool
@@ -110,6 +112,9 @@ func Generateupdate(
 		lcount++
 		if lcount >= loadn && (lcount%loadn) == 0 {
 			rndl = rand.New(rand.NewSource(seedl))
+		}
+		if mod >= 0 && (keynum%2) != mod {
+			getkey()
 		}
 	}
 
@@ -130,6 +135,7 @@ func Generateupdate(
 
 func Generateread(klen, loadn, seedl, seedc int64) func([]byte, int64) []byte {
 	var textint [16]byte
+	var getkey func(int64)
 
 	loadn1 := loadn * rndscale
 	intn := int64(9223372036854775807) - loadn1
@@ -137,7 +143,7 @@ func Generateread(klen, loadn, seedl, seedc int64) func([]byte, int64) []byte {
 	rndc := rand.New(rand.NewSource(seedc))
 	keynum, lcount := int64(0), int64(0)
 
-	getkey := func(mod int64) {
+	getkey = func(mod int64) {
 		if lcount < loadn { // from load pool, headstart
 			keynum = int64(rndl.Intn(int(loadn1)))
 		} else if mod > 0 && (lcount%mod) != 0 { // from create pool
@@ -164,7 +170,7 @@ func Generateread(klen, loadn, seedl, seedc int64) func([]byte, int64) []byte {
 
 func Generatedelete(
 	klen, vlen,
-	loadn, seedl, seedc, rem int64) func(k, v []byte) ([]byte, []byte) {
+	loadn, seedl, seedc, mod int64) func(k, v []byte) ([]byte, []byte) {
 
 	var textint [16]byte
 	var getkey func()
@@ -187,7 +193,7 @@ func Generatedelete(
 		if lcount >= loadn && (lcount%loadn) == 0 {
 			rndl = rand.New(rand.NewSource(seedl))
 		}
-		if (keynum % rem) != 0 {
+		if mod >= 0 && (keynum%2) != mod {
 			getkey()
 		}
 	}

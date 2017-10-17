@@ -13,11 +13,6 @@ import "math/rand"
 import "github.com/prataprc/golog"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 
-var ncreates int64
-var numentries int64
-var totalwrites int64
-var delrem = int64(2)
-
 func testlmdb() error {
 	options.path = lmdbpath()
 	defer func() {
@@ -233,7 +228,7 @@ func lmdbUpdater(
 	var nupdates int64
 	var key, value []byte
 	klen, vlen := int64(options.keylen), int64(options.keylen)
-	g := Generateupdate(klen, vlen, n, seedl, seedc)
+	g := Generateupdate(klen, vlen, n, seedl, seedc, -1)
 
 	update := func(txn *lmdb.Txn) (err error) {
 		//if "00000000000000000000000000699067" == string(key) {
@@ -272,7 +267,7 @@ func lmdbDeleter(
 	var xdeletes, ndeletes int64
 	var key, value []byte
 	klen, vlen := int64(options.keylen), int64(options.keylen)
-	g := Generatedelete(klen, vlen, n, seedl, seedc, delrem)
+	g := Generatedelete(klen, vlen, n, seedl, seedc, delmod)
 
 	delete := func(txn *lmdb.Txn) (err error) {
 		//if "00000000000000000000000000699067" == string(key) {
@@ -329,7 +324,7 @@ func lmdbGetter(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
 		value, err := txn.Get(dbi, key)
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
-		} else if (int64(x) % delrem) != 0 {
+		} else if (int64(x) % delmod) != 0 {
 			if err != nil {
 				return err
 			} else if bytes.Compare(key, value) != 0 {
@@ -397,7 +392,7 @@ func lmdbRanger(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
 				return nil
 			} else if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 				panic(xerr)
-			} else if (int64(x) % delrem) != 0 {
+			} else if (int64(x) % delmod) != 0 {
 				if err != nil {
 					return err
 				} else if bytes.Compare(key, value) != 0 {

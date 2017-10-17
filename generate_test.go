@@ -137,7 +137,7 @@ func TestGenerateCRUD(t *testing.T) {
 	updatel, updatec := map[int64]bool{}, map[int64]bool{}
 	// update load
 	klen, vlen, updaten := int64(32), int64(32), int64(1000000)
-	g = Generateupdate(klen, vlen, loadn, seedl, seedc)
+	g = Generateupdate(klen, vlen, loadn, seedl, seedc, -1)
 	key, value = g(nil, nil)
 	for i := int64(0); i < updaten; i++ {
 		keynum, err := strconv.ParseInt(Bytes2str(key), 10, 64)
@@ -213,7 +213,7 @@ func BenchmarkGeneratecreate(b *testing.B) {
 func BenchmarkGenerateupdate(b *testing.B) {
 	klen, vlen, n := int64(32), int64(32), int64(1*1000*1000)
 	seedl, seedc := int64(100), int64(200)
-	g := Generateupdate(klen, vlen, n, seedl, seedc)
+	g := Generateupdate(klen, vlen, n, seedl, seedc, -1)
 	key, value := g(nil, nil)
 	for i := 0; i < b.N; i++ {
 		key, value = g(key, value)
