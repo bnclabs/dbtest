@@ -14,6 +14,7 @@ var options struct {
 	path    string
 	entries int
 	writes  int
+	ops     int
 	keylen  int
 	seed    int
 }
@@ -25,6 +26,7 @@ func optparse(args []string) {
 	f.StringVar(&options.path, "path", "", "db path to open")
 	f.IntVar(&options.entries, "n", 1000000, "db path to open")
 	f.IntVar(&options.writes, "writes", 10000000, "total number of writes")
+	f.IntVar(&options.ops, "ops", 10000000, "total number of operations")
 	f.IntVar(&options.keylen, "key", 32, "db path to open")
 	f.IntVar(&options.seed, "seed", 10, "seed value to generate randomness")
 	f.Parse(args)
@@ -44,5 +46,7 @@ func main() {
 		testllrb()
 	case "mvcc":
 		testmvcc()
+	case "bubt":
+		testbubt()
 	}
 }

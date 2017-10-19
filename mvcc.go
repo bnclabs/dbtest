@@ -5,15 +5,13 @@ import "fmt"
 import "sync"
 import "time"
 import "bytes"
-import "runtime"
 import "strconv"
 import "sync/atomic"
+import "io/ioutil"
 import "math/rand"
 
 import "github.com/prataprc/gostore/llrb"
 import "github.com/prataprc/gostore/api"
-
-// TODO: add test cases for transactions.
 
 func testmvcc() error {
 	setts := llrb.Defaultsettings()
@@ -26,7 +24,7 @@ func testmvcc() error {
 		return err
 	}
 
-	go logger(index)
+	go mvccvalidator(index, true /*log*/)
 
 	var wwg, rwg sync.WaitGroup
 	//// writer routines
@@ -37,7 +35,7 @@ func testmvcc() error {
 	wwg.Add(3)
 	// reader routines
 	fin := make(chan struct{})
-	for i := 0; i < runtime.GOMAXPROCS(-1); i++ {
+	for i := 0; i < numcpus; i++ {
 		go mvccGetter(index, n, seedl, seedc, fin, &rwg)
 		go mvccRanger(index, n, seedl, seedc, fin, &rwg)
 		rwg.Add(2)
@@ -51,27 +49,34 @@ func testmvcc() error {
 	return nil
 }
 
-func logger(index *llrb.MVCC) {
+func mvccvalidator(index *llrb.MVCC, log bool) {
 	tick := time.NewTicker(10 * time.Second)
 	for {
 		<-tick.C
-		index.Log()
-		m := index.Stats()
-		fmt.Printf("count: %10d\n", m["n_count"])
-		a, b, c := m["n_inserts"], m["n_updates"], m["n_deletes"]
-		fmt.Printf("write: %10d %10d %10d\n", a, b, c)
-		a, b, c = m["n_nodes"], m["n_frees"], m["n_clones"]
-		fmt.Printf("nodes: %10d %10d %10d\n", a, b, c)
-		a, b, c = m["n_txns"], m["n_commits"], m["n_aborts"]
-		fmt.Printf("txns : %10d %10d %10d\n", a, b, c)
-		a, b = m["keymemory"], m["valmemory"]
-		fmt.Printf("reqm : %10d %10d\n", a, b)
-		a, b, c, d := m["n_reclaims"], m["n_snapshots"], m["n_purgedss"], m["n_activess"]
-		fmt.Printf("mvcc : %10d %10d %10d %10d\n", a, b, c, d)
-		//m["h_upsertdepth"]
-		//m["h_bulkfree"]
-		//m["h_reclaims"]
-		//m["h_versions"]
+
+		if log {
+			index.Log()
+			m := index.Stats()
+			fmt.Printf("count: %10d\n", m["n_count"])
+			a, b, c := m["n_inserts"], m["n_updates"], m["n_deletes"]
+			fmt.Printf("write: %10d %10d %10d\n", a, b, c)
+			a, b, c = m["n_nodes"], m["n_frees"], m["n_clones"]
+			fmt.Printf("nodes: %10d %10d %10d\n", a, b, c)
+			a, b, c = m["n_txns"], m["n_commits"], m["n_aborts"]
+			fmt.Printf("txns : %10d %10d %10d\n", a, b, c)
+			a, b = m["keymemory"], m["valmemory"]
+			fmt.Printf("reqm : %10d %10d\n", a, b)
+			a, b, c, d := m["n_reclaims"], m["n_snapshots"], m["n_purgedss"], m["n_activess"]
+			fmt.Printf("mvcc : %10d %10d %10d %10d\n", a, b, c, d)
+			//m["h_upsertdepth"]
+			//m["h_bulkfree"]
+			//m["h_reclaims"]
+			//m["h_versions"]
+		}
+
+		now := time.Now()
+		index.Validate()
+		fmt.Printf("Took %v to validate index\n", time.Since(now))
 	}
 }
 
@@ -99,11 +104,12 @@ func mvccLoad(index *llrb.MVCC, seedl int64) error {
 	return nil
 }
 
-var mvccsets = map[int]func(index *llrb.MVCC, key, val, oldval []byte) uint64{
-	0: mvccSet1, 1: mvccSet2, 2: mvccSet3, 3: mvccSet4,
+var mvccsets = []func(index *llrb.MVCC, key, val, oldval []byte) uint64{
+	mvccSet1, mvccSet2, mvccSet3, mvccSet4,
 }
 
 func mvccCreater(index *llrb.MVCC, n, seedc int64, wg *sync.WaitGroup) {
+	time.Sleep(100 * time.Millisecond)
 	defer wg.Done()
 
 	klen, vlen := int64(options.keylen), int64(options.keylen)
@@ -142,7 +148,30 @@ func mvccCreater(index *llrb.MVCC, n, seedc int64, wg *sync.WaitGroup) {
 	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), time.Since(epoch), rlbks)
 }
 
+func vmvccupdater(
+	key, oldvalue []byte, refcas, cas uint64, i int, del, ok bool) string {
+
+	var err error
+	if ok == false {
+		err = fmt.Errorf("unexpected false")
+	} else if del == true {
+		err = fmt.Errorf("unexpected delete")
+	} else if refcas > 0 && cas != refcas {
+		err = fmt.Errorf("expected %v, got %v", refcas, cas)
+	} else if bytes.Compare(key, oldvalue) != 0 {
+		err = fmt.Errorf("expected %q, got %q", key, oldvalue)
+	}
+	if err != nil && i == 0 {
+		panic(err)
+	} else if err != nil {
+		atomic.AddInt64(&conflicts, 1)
+		return "repeat"
+	}
+	return "ok"
+}
+
 func mvccUpdater(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
+	time.Sleep(400 * time.Millisecond)
 	defer wg.Done()
 
 	var nupdates int64
@@ -158,7 +187,7 @@ func mvccUpdater(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 		for i := 2; i >= 0; i-- {
 			refcas := mvccsets[setidx](index, key, value, oldvalue)
 			oldvalue, cas, del, ok := index.Get(key, oldvalue)
-			if verifyupdater(key, oldvalue, refcas, cas, i, del, ok) == "ok" {
+			if vmvccupdater(key, oldvalue, refcas, cas, i, del, ok) == "ok" {
 				break
 			}
 		}
@@ -218,7 +247,7 @@ func mvccSet2(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
 }
 
 func mvccSet3(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
-	for i := 2; i >= 0; i-- {
+	for i := numcpus * 2; i >= 0; i-- {
 		txn := index.BeginTxn(0xC0FFEE)
 		oldvalue = txn.Set(key, value, oldvalue)
 		//fmt.Printf("update3 %q %q %q \n", key, value, oldvalue)
@@ -233,12 +262,13 @@ func mvccSet3(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
 		} else if err.Error() == api.ErrorRollback.Error() {
 			atomic.AddInt64(&rollbacks, 1)
 		}
+		time.Sleep(100 * time.Microsecond)
 	}
 	return 0
 }
 
 func mvccSet4(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
-	for i := 2; i >= 0; i-- {
+	for i := numcpus * 2; i >= 0; i-- {
 		txn := index.BeginTxn(0xC0FFEE)
 		cur := txn.OpenCursor(key)
 		oldvalue = cur.Set(key, value, oldvalue)
@@ -254,15 +284,54 @@ func mvccSet4(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
 		} else if err.Error() == api.ErrorRollback.Error() {
 			atomic.AddInt64(&rollbacks, 1)
 		}
+		time.Sleep(100 * time.Microsecond)
 	}
 	return 0
 }
 
-var mvccdels = map[int]func(*llrb.MVCC, []byte, []byte, bool) (uint64, bool){
-	0: mvccDel1, 1: mvccDel2, 2: mvccDel3, 3: mvccDel4,
+var mvccdels = []func(*llrb.MVCC, []byte, []byte, bool) (uint64, bool){
+	mvccDel1, mvccDel2, mvccDel3, mvccDel4,
+}
+
+func vmvccdel(
+	index interface{}, key, oldvalue []byte, refcas uint64,
+	i int, lsm, ok bool) string {
+
+	var err error
+	if lsm {
+		var view *llrb.View
+		switch idx := index.(type) {
+		case *llrb.LLRB:
+			view = idx.View(0x1234)
+		case *llrb.MVCC:
+			view = idx.View(0x1234)
+		}
+
+		_, oldvalue, cas, del, err := view.OpenCursor(key).YNext(false)
+
+		if err != nil {
+		} else if del == false {
+			err = fmt.Errorf("expected delete")
+		} else if refcas > 0 && cas != refcas {
+			err = fmt.Errorf("expected %v, got %v", refcas, cas)
+		}
+		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
+			err = fmt.Errorf("expected %q, got %q", key, oldvalue)
+		}
+		view.Abort()
+	}
+
+	if err != nil && i == 0 {
+		panic(err)
+	} else if err != nil {
+		atomic.AddInt64(&conflicts, 1)
+		return "repeat"
+	}
+	return "ok"
 }
 
 func mvccDeleter(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
+	time.Sleep(800 * time.Millisecond)
 	defer wg.Done()
 
 	var ndeletes, xdeletes int64
@@ -284,7 +353,7 @@ func mvccDeleter(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 		for i := 2; i >= 0; i-- {
 			refcas, ok1 := mvccdels[delidx](index, key, value, lsm)
 			oldvalue, _, _, ok2 := index.Get(key, oldvalue)
-			if verifydel(index, key, oldvalue, refcas, i, lsm, ok2) == "ok" {
+			if vmvccdel(index, key, oldvalue, refcas, i, lsm, ok2) == "ok" {
 				if ok1 || lsm == true {
 					ndeletes++
 					atomic.AddInt64(&numentries, -1)
@@ -325,7 +394,7 @@ func mvccDel1(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 func mvccDel2(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
-	for i := 2; i >= 0; i-- {
+	for i := numcpus * 2; i >= 0; i-- {
 		txn := index.BeginTxn(0xC0FFEE)
 		oldvalue = txn.Delete(key, oldvalue, lsm)
 		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
@@ -341,6 +410,7 @@ func mvccDel2(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 		} else if err.Error() == api.ErrorRollback.Error() {
 			atomic.AddInt64(&rollbacks, 1)
 		}
+		time.Sleep(100 * time.Microsecond)
 	}
 	return 0, ok
 }
@@ -348,7 +418,7 @@ func mvccDel2(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 func mvccDel3(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
-	for i := 2; i >= 0; i-- {
+	for i := numcpus * 2; i >= 0; i-- {
 		txn := index.BeginTxn(0xC0FFEE)
 		cur := txn.OpenCursor(key)
 		oldvalue = cur.Delete(key, oldvalue, lsm)
@@ -365,6 +435,7 @@ func mvccDel3(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 		} else if err.Error() == api.ErrorRollback.Error() {
 			atomic.AddInt64(&rollbacks, 1)
 		}
+		time.Sleep(100 * time.Microsecond)
 	}
 	return 0, ok
 }
@@ -372,7 +443,7 @@ func mvccDel3(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 func mvccDel4(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
-	for i := 2; i >= 0; i-- {
+	for i := numcpus * 2; i >= 0; i-- {
 		txn := index.BeginTxn(0xC0FFEE)
 		cur := txn.OpenCursor(key)
 		curkey, _ := cur.Key()
@@ -388,12 +459,13 @@ func mvccDel4(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 		} else if err.Error() == api.ErrorRollback.Error() {
 			atomic.AddInt64(&rollbacks, 1)
 		}
+		time.Sleep(100 * time.Microsecond)
 	}
 	return 0, ok
 }
 
-var mvccgets = map[int]func(index *llrb.MVCC, key, val []byte) ([]byte, uint64, bool, bool){
-	0: mvccGet1, 1: mvccGet2, 2: mvccGet3,
+var mvccgets = []func(index *llrb.MVCC, key, val []byte) ([]byte, uint64, bool, bool){
+	mvccGet1, mvccGet3, mvccGet3,
 }
 
 func mvccGetter(
@@ -433,11 +505,12 @@ loop:
 			break loop
 		default:
 		}
-		if ngets%markercount == 0 {
+		if ngm := ngets + nmisses; ngm%markercount == 0 {
 			x := time.Since(now).Round(time.Second)
 			y := time.Since(epoch).Round(time.Second)
 			fmsg := "mvccGetter {%v items in %v} {%v:%v items in %v}\n"
 			fmt.Printf(fmsg, markercount, x, ngets, nmisses, y)
+			now = time.Now()
 		}
 	}
 	duration := time.Since(epoch)
@@ -480,11 +553,22 @@ func mvccGet3(
 
 	view := index.View(0x1235)
 	value, del, ok := view.Get(key, value)
+	//fmt.Printf("Get3 %q %q %v %v\n", key, value, del, ok)
 	if ok == true {
 		cur := view.OpenCursor(key)
-		if ckey, cdel := cur.Key(); cdel != del {
-			panic(fmt.Errorf("expected %v, got %v", del, cdel))
-		} else if bytes.Compare(ckey, key) != 0 {
+		ykey, yvalue, _, ydel, _ := cur.YNext(false /*fin*/)
+		if bytes.Compare(key, ykey) != 0 {
+			fmt.Printf("count %v\n", index.Count())
+			buf := bytes.NewBuffer(nil)
+			index.Dotdump(buf)
+			ioutil.WriteFile("debug.dot", buf.Bytes(), 0666)
+			panic(fmt.Errorf("expected %q, got %q", key, ykey))
+		} else if del == false && ydel == false {
+			if bytes.Compare(value, yvalue) != 0 {
+				panic(fmt.Errorf("expected %q, got %q", value, yvalue))
+			}
+		}
+		if ckey, _ := cur.Key(); bytes.Compare(ckey, key) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, ckey))
 		} else if cvalue := cur.Value(); bytes.Compare(cvalue, value) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", value, cvalue))
@@ -494,8 +578,8 @@ func mvccGet3(
 	return value, 0, del, ok
 }
 
-var mvccrngs = map[int]func(index *llrb.MVCC, key, val []byte) int64{
-	0: mvccRange1, 1: mvccRange2, 2: mvccRange3, 3: mvccRange4,
+var mvccrngs = []func(index *llrb.MVCC, key, val []byte) int64{
+	mvccRange1, mvccRange2, mvccRange3, mvccRange4,
 }
 
 func mvccRanger(
@@ -567,6 +651,7 @@ func mvccRange2(index *llrb.MVCC, key, value []byte) (n int64) {
 		} else if del == false && bytes.Compare(key, value) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, value))
 		}
+		n++
 	}
 	txn.Abort()
 	return
@@ -589,6 +674,7 @@ func mvccRange3(index *llrb.MVCC, key, value []byte) (n int64) {
 		} else if del == false && bytes.Compare(key, value) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, value))
 		}
+		n++
 	}
 	view.Abort()
 	return
@@ -611,6 +697,7 @@ func mvccRange4(index *llrb.MVCC, key, value []byte) (n int64) {
 		} else if del == false && bytes.Compare(key, value) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, value))
 		}
+		n++
 	}
 	view.Abort()
 	return

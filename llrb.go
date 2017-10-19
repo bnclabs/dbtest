@@ -23,6 +23,8 @@ func testllrb() error {
 		return err
 	}
 
+	go llrbvalidator(index, true /*log*/)
+
 	var wwg, rwg sync.WaitGroup
 	//// writer routines
 	n := atomic.LoadInt64(&numentries)
@@ -41,9 +43,34 @@ func testllrb() error {
 	close(fin)
 	rwg.Wait()
 
-	fmt.Printf("LMDB total indexed %v items\n", index.Count())
+	fmt.Printf("LLRB total indexed %v items\n", index.Count())
 
 	return nil
+}
+
+func llrbvalidator(index *llrb.LLRB, log bool) {
+	tick := time.NewTicker(10 * time.Second)
+	for {
+		<-tick.C
+
+		if log {
+			index.Log()
+			m := index.Stats()
+			fmt.Printf("count: %10d\n", m["n_count"])
+			a, b, c := m["n_inserts"], m["n_updates"], m["n_deletes"]
+			fmt.Printf("write: %10d %10d %10d\n", a, b, c)
+			a, b, c = m["n_nodes"], m["n_frees"], m["n_clones"]
+			fmt.Printf("nodes: %10d %10d %10d\n", a, b, c)
+			a, b, c = m["n_txns"], m["n_commits"], m["n_aborts"]
+			fmt.Printf("txns : %10d %10d %10d\n", a, b, c)
+			a, b = m["keymemory"], m["valmemory"]
+			fmt.Printf("reqm : %10d %10d\n", a, b)
+		}
+
+		now := time.Now()
+		index.Validate()
+		fmt.Printf("Took %v to validate index\n", time.Since(now))
+	}
 }
 
 func llrbLoad(index *llrb.LLRB, seedl int64) error {
@@ -70,8 +97,8 @@ func llrbLoad(index *llrb.LLRB, seedl int64) error {
 	return nil
 }
 
-var llrbsets = map[int]func(index *llrb.LLRB, key, val, oldval []byte) uint64{
-	0: llrbSet1, 1: llrbSet2, 2: llrbSet3, 3: llrbSet4,
+var llrbsets = []func(index *llrb.LLRB, key, val, oldval []byte) uint64{
+	llrbSet1, llrbSet2, llrbSet3, llrbSet4,
 }
 
 func llrbCreater(index *llrb.LLRB, n, seedc int64, wg *sync.WaitGroup) {
@@ -112,7 +139,7 @@ func llrbCreater(index *llrb.LLRB, n, seedc int64, wg *sync.WaitGroup) {
 	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), time.Since(epoch))
 }
 
-func verifyupdater(
+func vllrbupdater(
 	key, oldvalue []byte, refcas, cas uint64, i int, del, ok bool) string {
 
 	var err error
@@ -150,7 +177,7 @@ func llrbUpdater(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 		for i := 2; i >= 0; i-- {
 			refcas := llrbsets[setidx](index, key, value, oldvalue)
 			oldvalue, cas, del, ok := index.Get(key, oldvalue)
-			if verifyupdater(key, oldvalue, refcas, cas, i, del, ok) == "ok" {
+			if vllrbupdater(key, oldvalue, refcas, cas, i, del, ok) == "ok" {
 				break
 			}
 		}
@@ -237,11 +264,11 @@ func llrbSet4(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
 	return 0
 }
 
-var llrbdels = map[int]func(*llrb.LLRB, []byte, []byte, bool) (uint64, bool){
-	0: llrbDel1, 1: llrbDel2, 2: llrbDel3, 3: llrbDel4,
+var llrbdels = []func(*llrb.LLRB, []byte, []byte, bool) (uint64, bool){
+	llrbDel1, llrbDel2, llrbDel3, llrbDel4,
 }
 
-func verifydel(
+func vllrbdel(
 	index interface{}, key, oldvalue []byte, refcas uint64,
 	i int, lsm, ok bool) string {
 
@@ -307,7 +334,7 @@ func llrbDeleter(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 		for i := 2; i >= 0; i-- {
 			refcas, ok1 := llrbdels[delidx](index, key, value, lsm)
 			oldvalue, _, _, ok2 := index.Get(key, oldvalue)
-			if verifydel(index, key, oldvalue, refcas, i, lsm, ok2) == "ok" {
+			if vllrbdel(index, key, oldvalue, refcas, i, lsm, ok2) == "ok" {
 				if ok1 || lsm == true {
 					ndeletes++
 					atomic.AddInt64(&numentries, -1)
@@ -393,8 +420,8 @@ func llrbDel4(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	return 0, ok
 }
 
-var llrbgets = map[int]func(index *llrb.LLRB, key, val []byte) ([]byte, uint64, bool, bool){
-	0: llrbGet1, 1: llrbGet2, 2: llrbGet3,
+var llrbgets = []func(x *llrb.LLRB, k, v []byte) ([]byte, uint64, bool, bool){
+	llrbGet1, llrbGet2, llrbGet3,
 }
 
 func llrbGetter(
@@ -435,7 +462,7 @@ loop:
 			break loop
 		default:
 		}
-		if ngets%markercount == 0 {
+		if ngm := ngets + nmisses; ngm%markercount == 0 {
 			x := time.Since(now).Round(time.Second)
 			y := time.Since(epoch).Round(time.Second)
 			fmsg := "llrbGetter {%v items in %v} {%v:%v items in %v}\n"
@@ -496,8 +523,8 @@ func llrbGet3(
 	return value, 0, del, ok
 }
 
-var llrbrngs = map[int]func(index *llrb.LLRB, key, val []byte) int64{
-	0: llrbRange1, 1: llrbRange2, 2: llrbRange3, 3: llrbRange4,
+var llrbrngs = []func(index *llrb.LLRB, key, val []byte) int64{
+	llrbRange1, llrbRange2, llrbRange3, llrbRange4,
 }
 
 func llrbRanger(
@@ -569,6 +596,7 @@ func llrbRange2(index *llrb.LLRB, key, value []byte) (n int64) {
 		} else if del == false && bytes.Compare(key, value) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, value))
 		}
+		n++
 	}
 	txn.Abort()
 	return
@@ -591,6 +619,7 @@ func llrbRange3(index *llrb.LLRB, key, value []byte) (n int64) {
 		} else if del == false && bytes.Compare(key, value) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, value))
 		}
+		n++
 	}
 	view.Abort()
 	return
@@ -613,6 +642,7 @@ func llrbRange4(index *llrb.LLRB, key, value []byte) (n int64) {
 		} else if del == false && bytes.Compare(key, value) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, value))
 		}
+		n++
 	}
 	view.Abort()
 	return

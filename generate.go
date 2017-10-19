@@ -168,6 +168,28 @@ func Generateread(klen, loadn, seedl, seedc int64) func([]byte, int64) []byte {
 	}
 }
 
+func Generatereadseq(klen, loadn, seedl int64) func([]byte, int64) []byte {
+	var textint [16]byte
+	var getkey func(int64)
+
+	rndl := rand.New(rand.NewSource(seedl))
+	keynum, lcount := int64(0), int64(0)
+
+	getkey = func(mod int64) {
+		keynum = int64(rndl.Intn(int(loadn)))
+		lcount++
+	}
+
+	return func(key []byte, ncreates int64) []byte {
+		getkey(ncreates / loadn)
+		key = Fixbuffer(key, int64(klen))
+		copy(key, zeros)
+		ascii := strconv.AppendInt(textint[:0], int64(keynum), 10)
+		copy(key[klen-int64(len(ascii)):klen], ascii)
+		return key
+	}
+}
+
 func Generatedelete(
 	klen, vlen,
 	loadn, seedl, seedc, mod int64) func(k, v []byte) ([]byte, []byte) {
