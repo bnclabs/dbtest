@@ -97,7 +97,6 @@ func bubtGetter(
 	value := make([]byte, 16)
 loop:
 	for {
-		runtime.Gosched()
 		ngets++
 		key = g(key, 0)
 		ln := len(bubtgets)
@@ -183,7 +182,6 @@ func bubtRanger(
 	epoch, value := time.Now(), make([]byte, 16)
 loop:
 	for {
-		runtime.Gosched()
 		key = g(key, 0)
 		ln := len(bubtrngs)
 		n := bubtrngs[rnd.Intn(1000000)%ln](index, key, value)
