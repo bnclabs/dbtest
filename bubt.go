@@ -60,8 +60,8 @@ func testbubt() error {
 
 	var rwg sync.WaitGroup
 	for i := 0; i < runtime.GOMAXPROCS(-1); i++ {
-		go bubtGetter(name, paths, mmap, n, seed, &rwg)
-		go bubtRanger(name, paths, mmap, n, seed, &rwg)
+		go bubtGetter(index, n, seed, &rwg)
+		go bubtRanger(index, n, seed, &rwg)
 		rwg.Add(2)
 	}
 	rwg.Wait()
@@ -75,17 +75,8 @@ var bubtgets = []func(x *bubt.Snapshot, k, v []byte) ([]byte, uint64, bool, bool
 	bubtGet1, bubtGet2,
 }
 
-func bubtGetter(
-	name string, paths []string, mmap bool,
-	n, seed int64, wg *sync.WaitGroup) {
-
+func bubtGetter(index *bubt.Snapshot, n, seed int64, wg *sync.WaitGroup) {
 	defer wg.Done()
-
-	index, err := bubt.OpenSnapshot(name, paths, mmap)
-	if err != nil {
-		panic(err)
-	}
-	defer index.Close()
 
 	var ngets, nmisses int64
 	var key []byte
@@ -151,7 +142,7 @@ func bubtGet2(
 		} else if bytes.Compare(ckey, key) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, ckey))
 		} else if cvalue := cur.Value(); bytes.Compare(cvalue, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", value, cvalue))
+			panic(fmt.Errorf("%q expected %q, got %q", key, value, cvalue))
 		}
 	}
 	view.Abort()
@@ -162,17 +153,8 @@ var bubtrngs = []func(index *bubt.Snapshot, key, val []byte) int64{
 	bubtRange1, bubtRange2,
 }
 
-func bubtRanger(
-	name string, paths []string, mmap bool,
-	n, seed int64, wg *sync.WaitGroup) {
-
+func bubtRanger(index *bubt.Snapshot, n, seed int64, wg *sync.WaitGroup) {
 	defer wg.Done()
-
-	index, err := bubt.OpenSnapshot(name, paths, mmap)
-	if err != nil {
-		panic(err)
-	}
-	defer index.Close()
 
 	var nranges int64
 	var key []byte

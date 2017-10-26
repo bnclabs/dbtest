@@ -270,13 +270,16 @@ func mvccSet3(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
 func mvccSet4(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
 	for i := numcpus * 2; i >= 0; i-- {
 		txn := index.BeginTxn(0xC0FFEE)
-		cur := txn.OpenCursor(key)
+		cur, err := txn.OpenCursor(key)
+		if err != nil {
+			panic(err)
+		}
 		oldvalue = cur.Set(key, value, oldvalue)
 		//fmt.Printf("update4 %q %q %q \n", key, value, oldvalue)
 		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
 		}
-		err := txn.Commit()
+		err = txn.Commit()
 		if err == nil {
 			return 0
 		} else if i == 0 {
@@ -298,8 +301,9 @@ func vmvccdel(
 	i int, lsm, ok bool) string {
 
 	var err error
+	var cur api.Cursor
 	if lsm {
-		var view *llrb.View
+		var view api.Transactor
 		switch idx := index.(type) {
 		case *llrb.LLRB:
 			view = idx.View(0x1234)
@@ -307,16 +311,18 @@ func vmvccdel(
 			view = idx.View(0x1234)
 		}
 
-		_, oldvalue, cas, del, err := view.OpenCursor(key).YNext(false)
-
-		if err != nil {
-		} else if del == false {
-			err = fmt.Errorf("expected delete")
-		} else if refcas > 0 && cas != refcas {
-			err = fmt.Errorf("expected %v, got %v", refcas, cas)
-		}
-		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-			err = fmt.Errorf("expected %q, got %q", key, oldvalue)
+		cur, err = view.OpenCursor(key)
+		if err == err {
+			_, oldvalue, cas, del, err := cur.YNext(false)
+			if err != nil {
+			} else if del == false {
+				err = fmt.Errorf("expected delete")
+			} else if refcas > 0 && cas != refcas {
+				err = fmt.Errorf("expected %v, got %v", refcas, cas)
+			}
+			if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
+				err = fmt.Errorf("expected %q, got %q", key, oldvalue)
+			}
 		}
 		view.Abort()
 	}
@@ -420,14 +426,17 @@ func mvccDel3(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 
 	for i := numcpus * 2; i >= 0; i-- {
 		txn := index.BeginTxn(0xC0FFEE)
-		cur := txn.OpenCursor(key)
+		cur, err := txn.OpenCursor(key)
+		if err != nil {
+			panic(err)
+		}
 		oldvalue = cur.Delete(key, oldvalue, lsm)
 		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
 		} else if len(oldvalue) > 0 {
 			ok = true
 		}
-		err := txn.Commit()
+		err = txn.Commit()
 		if err == nil {
 			return 0, ok
 		} else if i == 0 {
@@ -445,13 +454,16 @@ func mvccDel4(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 
 	for i := numcpus * 2; i >= 0; i-- {
 		txn := index.BeginTxn(0xC0FFEE)
-		cur := txn.OpenCursor(key)
+		cur, err := txn.OpenCursor(key)
+		if err != nil {
+			panic(err)
+		}
 		curkey, _ := cur.Key()
 		if bytes.Compare(key, curkey) == 0 {
 			cur.Delcursor(lsm)
 			ok = true
 		}
-		err := txn.Commit()
+		err = txn.Commit()
 		if err == nil {
 			return 0, ok
 		} else if i == 0 {
@@ -534,7 +546,10 @@ func mvccGet2(
 	txn := index.BeginTxn(0xC0FFEE)
 	value, del, ok := txn.Get(key, value)
 	if ok == true {
-		cur := txn.OpenCursor(key)
+		cur, err := txn.OpenCursor(key)
+		if err != nil {
+			panic(err)
+		}
 		if ckey, cdel := cur.Key(); cdel != del {
 			panic(fmt.Errorf("expected %v, got %v", del, cdel))
 		} else if bytes.Compare(ckey, key) != 0 {
@@ -555,7 +570,10 @@ func mvccGet3(
 	value, del, ok := view.Get(key, value)
 	//fmt.Printf("Get3 %q %q %v %v\n", key, value, del, ok)
 	if ok == true {
-		cur := view.OpenCursor(key)
+		cur, err := view.OpenCursor(key)
+		if err != nil {
+			panic(err)
+		}
 		ykey, yvalue, _, ydel, _ := cur.YNext(false /*fin*/)
 		if bytes.Compare(key, ykey) != 0 {
 			fmt.Printf("count %v\n", index.Count())
@@ -615,7 +633,10 @@ loop:
 func mvccRange1(index *llrb.MVCC, key, value []byte) (n int64) {
 	//fmt.Printf("mvccRange1 %q\n", key)
 	txn := index.BeginTxn(0xC0FFEE)
-	cur := txn.OpenCursor(key)
+	cur, err := txn.OpenCursor(key)
+	if err != nil {
+		panic(err)
+	}
 	for i := 0; i < 100; i++ {
 		key, value, del, err := cur.GetNext()
 		if err == io.EOF {
@@ -636,7 +657,10 @@ func mvccRange1(index *llrb.MVCC, key, value []byte) (n int64) {
 
 func mvccRange2(index *llrb.MVCC, key, value []byte) (n int64) {
 	txn := index.BeginTxn(0xC0FFEE)
-	cur := txn.OpenCursor(key)
+	cur, err := txn.OpenCursor(key)
+	if err != nil {
+		panic(err)
+	}
 	for i := 0; i < 100; i++ {
 		key, value, _, del, err := cur.YNext(false /*fin*/)
 		if err == io.EOF {
@@ -659,7 +683,10 @@ func mvccRange2(index *llrb.MVCC, key, value []byte) (n int64) {
 
 func mvccRange3(index *llrb.MVCC, key, value []byte) (n int64) {
 	view := index.View(0x1236)
-	cur := view.OpenCursor(key)
+	cur, err := view.OpenCursor(key)
+	if err != nil {
+		panic(err)
+	}
 	for i := 0; i < 100; i++ {
 		key, value, del, err := cur.GetNext()
 		if err == io.EOF {
@@ -682,7 +709,10 @@ func mvccRange3(index *llrb.MVCC, key, value []byte) (n int64) {
 
 func mvccRange4(index *llrb.MVCC, key, value []byte) (n int64) {
 	view := index.View(0x1237)
-	cur := view.OpenCursor(key)
+	cur, err := view.OpenCursor(key)
+	if err != nil {
+		panic(err)
+	}
 	for i := 0; i < 100; i++ {
 		key, value, _, del, err := cur.YNext(false /*fin*/)
 		if err == io.EOF {
