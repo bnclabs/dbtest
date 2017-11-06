@@ -5,76 +5,79 @@ import "fmt"
 import "sync"
 import "time"
 import "bytes"
-import "runtime"
+
+//import "runtime"
 import "strconv"
 import "sync/atomic"
 import "math/rand"
 
 import "github.com/prataprc/gostore/api"
-import "github.com/prataprc/gostore/llrb"
+import "github.com/prataprc/gostore/bogn"
 
-func testllrb() error {
-	setts := llrb.Defaultsettings()
-	index := llrb.NewLLRB("dbtest", setts)
+func testbogn() error {
+	setts := bogn.Defaultsettings()
+	index, err := bogn.New("dbtest", setts)
+	if err != nil {
+		panic(err)
+	}
 	defer index.Destroy()
 
 	seedl, seedc := int64(options.seed), int64(options.seed)+100
 	fmt.Printf("Seed for load: %v, for ops: %v\n", seedl, seedc)
-	if err := llrbLoad(index, seedl); err != nil {
+	if err := bognLoad(index, seedl); err != nil {
 		return err
 	}
 
-	go llrbvalidator(index, true /*log*/)
+	//go bognvalidator(index, true /*log*/)
 
-	var wwg, rwg sync.WaitGroup
-	//// writer routines
-	n := atomic.LoadInt64(&numentries)
-	go llrbCreater(index, n, seedc, &wwg)
-	go llrbUpdater(index, n, seedl, seedc, &wwg)
-	go llrbDeleter(index, n, seedl, seedc, &wwg)
-	wwg.Add(3)
-	// reader routines
-	fin := make(chan struct{})
-	for i := 0; i < runtime.GOMAXPROCS(-1); i++ {
-		go llrbGetter(index, n, seedl, seedc, fin, &rwg)
-		go llrbRanger(index, n, seedl, seedc, fin, &rwg)
-		rwg.Add(2)
-	}
-	wwg.Wait()
-	close(fin)
-	rwg.Wait()
+	//var wwg, rwg sync.WaitGroup
+	////// writer routines
+	//n := atomic.LoadInt64(&numentries)
+	//go bognCreater(index, n, seedc, &wwg)
+	//go bognUpdater(index, n, seedl, seedc, &wwg)
+	//go bognDeleter(index, n, seedl, seedc, &wwg)
+	//wwg.Add(3)
+	//// reader routines
+	//fin := make(chan struct{})
+	//for i := 0; i < runtime.GOMAXPROCS(-1); i++ {
+	//	go bognGetter(index, n, seedl, seedc, fin, &rwg)
+	//	go bognRanger(index, n, seedl, seedc, fin, &rwg)
+	//	rwg.Add(2)
+	//}
+	//wwg.Wait()
+	//close(fin)
+	//rwg.Wait()
 
-	fmt.Printf("LLRB total indexed %v items\n", index.Count())
-
+	index.Log()
 	return nil
 }
 
-func llrbvalidator(index *llrb.LLRB, log bool) {
+func bognvalidator(index *bogn.Bogn, log bool) {
 	tick := time.NewTicker(10 * time.Second)
 	for {
 		<-tick.C
 
 		if log {
 			index.Log()
-			m := index.Stats()
-			fmt.Printf("count: %10d\n", m["n_count"])
-			a, b, c := m["n_inserts"], m["n_updates"], m["n_deletes"]
-			fmt.Printf("write: %10d %10d %10d\n", a, b, c)
-			a, b, c = m["n_nodes"], m["n_frees"], m["n_clones"]
-			fmt.Printf("nodes: %10d %10d %10d\n", a, b, c)
-			a, b, c = m["n_txns"], m["n_commits"], m["n_aborts"]
-			fmt.Printf("txns : %10d %10d %10d\n", a, b, c)
-			a, b = m["keymemory"], m["valmemory"]
-			fmt.Printf("reqm : %10d %10d\n", a, b)
+			//m := index.Stats()
+			//fmt.Printf("count: %10d\n", m["n_count"])
+			//a, b, c := m["n_inserts"], m["n_updates"], m["n_deletes"]
+			//fmt.Printf("write: %10d %10d %10d\n", a, b, c)
+			//a, b, c = m["n_nodes"], m["n_frees"], m["n_clones"]
+			//fmt.Printf("nodes: %10d %10d %10d\n", a, b, c)
+			//a, b, c = m["n_txns"], m["n_commits"], m["n_aborts"]
+			//fmt.Printf("txns : %10d %10d %10d\n", a, b, c)
+			//a, b = m["keymemory"], m["valmemory"]
+			//fmt.Printf("reqm : %10d %10d\n", a, b)
 		}
 
 		now := time.Now()
-		index.Validate()
+		//index.Validate()
 		fmt.Printf("Took %v to validate index\n", time.Since(now))
 	}
 }
 
-func llrbLoad(index *llrb.LLRB, seedl int64) error {
+func bognLoad(index *bogn.Bogn, seedl int64) error {
 	klen, vlen := int64(options.keylen), int64(options.keylen)
 	n := int64(options.entries / 2)
 	if n > 1000000 {
@@ -98,11 +101,11 @@ func llrbLoad(index *llrb.LLRB, seedl int64) error {
 	return nil
 }
 
-var llrbsets = []func(index *llrb.LLRB, key, val, oldval []byte) uint64{
-	llrbSet1, llrbSet2, llrbSet3, llrbSet4,
+var bognsets = []func(index *bogn.Bogn, key, val, oldval []byte) uint64{
+	bognSet1, bognSet2, bognSet3, bognSet4,
 }
 
-func llrbCreater(index *llrb.LLRB, n, seedc int64, wg *sync.WaitGroup) {
+func bognCreater(index *bogn.Bogn, n, seedc int64, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	klen, vlen := int64(options.keylen), int64(options.keylen)
@@ -114,7 +117,7 @@ func llrbCreater(index *llrb.LLRB, n, seedc int64, wg *sync.WaitGroup) {
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		key, value = g(key, value)
 		setidx := rnd.Intn(1000000) % 4
-		refcas := llrbsets[setidx](index, key, value, oldvalue)
+		refcas := bognsets[setidx](index, key, value, oldvalue)
 		oldvalue, cas, del, ok := index.Get(key, oldvalue)
 		if ok == false {
 			panic("unexpected false")
@@ -129,18 +132,17 @@ func llrbCreater(index *llrb.LLRB, n, seedc int64, wg *sync.WaitGroup) {
 		atomic.AddInt64(&numentries, 1)
 		atomic.AddInt64(&totalwrites, 1)
 		if nc := atomic.AddInt64(&ncreates, 1); nc%markercount == 0 {
-			count := index.Count()
 			x, y := time.Since(now).Round(time.Second), time.Since(epoch)
-			fmsg := "llrbCreated {%v items in %v} {%v items in %v} count:%v\n"
-			fmt.Printf(fmsg, markercount, x, nc, y.Round(time.Second), count)
+			fmsg := "bognCreated {%v items in %v} {%v items in %v}\n"
+			fmt.Printf(fmsg, markercount, x, nc, y.Round(time.Second))
 			now = time.Now()
 		}
 	}
-	fmsg := "at exit, llrbCreated %v items in %v\n"
+	fmsg := "at exit, bognCreated %v items in %v\n"
 	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), time.Since(epoch))
 }
 
-func vllrbupdater(
+func vbognupdater(
 	key, oldvalue []byte, refcas, cas uint64, i int, del, ok bool) string {
 
 	var err error
@@ -162,7 +164,7 @@ func vllrbupdater(
 	return "ok"
 }
 
-func llrbUpdater(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
+func bognUpdater(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	var nupdates int64
@@ -176,27 +178,26 @@ func llrbUpdater(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 		key, value = g(key, value)
 		setidx := rnd.Intn(1000000) % 4
 		for i := 2; i >= 0; i-- {
-			refcas := llrbsets[setidx](index, key, value, oldvalue)
+			refcas := bognsets[setidx](index, key, value, oldvalue)
 			oldvalue, cas, del, ok := index.Get(key, oldvalue)
-			if vllrbupdater(key, oldvalue, refcas, cas, i, del, ok) == "ok" {
+			if vbognupdater(key, oldvalue, refcas, cas, i, del, ok) == "ok" {
 				break
 			}
 		}
 
 		atomic.AddInt64(&totalwrites, 1)
 		if nupdates = nupdates + 1; nupdates%markercount == 0 {
-			count := index.Count()
 			x, y := time.Since(now).Round(time.Second), time.Since(epoch)
-			fmsg := "llrbUpdated {%v items in %v} {%v items in %v} count:%v\n"
-			fmt.Printf(fmsg, markercount, x, nupdates, y.Round(time.Second), count)
+			fmsg := "bognUpdated {%v items in %v} {%v items in %v}\n"
+			fmt.Printf(fmsg, markercount, x, nupdates, y.Round(time.Second))
 			now = time.Now()
 		}
 	}
-	fmsg := "at exit, llrbUpdated %v items in %v\n"
+	fmsg := "at exit, bognUpdated %v items in %v\n"
 	fmt.Printf(fmsg, nupdates, time.Since(epoch))
 }
 
-func llrbSet1(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
+func bognSet1(index *bogn.Bogn, key, value, oldvalue []byte) uint64 {
 	oldvalue, cas := index.Set(key, value, oldvalue)
 	//fmt.Printf("update1 %q %q %q \n", key, value, oldvalue)
 	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
@@ -205,7 +206,7 @@ func llrbSet1(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
 	return cas
 }
 
-func llrbverifyset2(err error, i int, key, oldvalue []byte) string {
+func bognverifyset2(err error, i int, key, oldvalue []byte) string {
 	if err != nil {
 	} else if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
 		err = fmt.Errorf("expected %q, got %q", key, oldvalue)
@@ -219,7 +220,7 @@ func llrbverifyset2(err error, i int, key, oldvalue []byte) string {
 	return "ok"
 }
 
-func llrbSet2(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
+func bognSet2(index *bogn.Bogn, key, value, oldvalue []byte) uint64 {
 	for i := 2; i >= 0; i-- {
 		oldvalue, oldcas, deleted, ok := index.Get(key, oldvalue)
 		if deleted || ok == false {
@@ -231,14 +232,14 @@ func llrbSet2(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
 		}
 		oldvalue, cas, err := index.SetCAS(key, value, oldvalue, oldcas)
 		//fmt.Printf("update2 %q %q %q \n", key, value, oldvalue)
-		if llrbverifyset2(err, i, key, oldvalue) == "ok" {
+		if bognverifyset2(err, i, key, oldvalue) == "ok" {
 			return cas
 		}
 	}
 	panic("unreachable code")
 }
 
-func llrbSet3(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
+func bognSet3(index *bogn.Bogn, key, value, oldvalue []byte) uint64 {
 	txn := index.BeginTxn(0xC0FFEE)
 	oldvalue = txn.Set(key, value, oldvalue)
 	//fmt.Printf("update3 %q %q %q \n", key, value, oldvalue)
@@ -251,7 +252,7 @@ func llrbSet3(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
 	return 0
 }
 
-func llrbSet4(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
+func bognSet4(index *bogn.Bogn, key, value, oldvalue []byte) uint64 {
 	txn := index.BeginTxn(0xC0FFEE)
 	cur, err := txn.OpenCursor(key)
 	if err != nil {
@@ -268,11 +269,11 @@ func llrbSet4(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
 	return 0
 }
 
-var llrbdels = []func(*llrb.LLRB, []byte, []byte, bool) (uint64, bool){
-	llrbDel1, llrbDel2, llrbDel3, llrbDel4,
+var bogndels = []func(*bogn.Bogn, []byte, []byte, bool) (uint64, bool){
+	bognDel1, bognDel2, bognDel3, bognDel4,
 }
 
-func vllrbdel(
+func vbogndel(
 	index interface{}, key, oldvalue []byte, refcas uint64,
 	i int, lsm, ok bool) string {
 
@@ -288,9 +289,7 @@ func vllrbdel(
 	} else {
 		var view api.Transactor
 		switch idx := index.(type) {
-		case *llrb.LLRB:
-			view = idx.View(0x1234)
-		case *llrb.MVCC:
+		case *bogn.Bogn:
 			view = idx.View(0x1234)
 		}
 
@@ -320,7 +319,7 @@ func vllrbdel(
 	return "ok"
 }
 
-func llrbDeleter(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
+func bognDeleter(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	var ndeletes, xdeletes int64
@@ -334,15 +333,15 @@ func llrbDeleter(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		key, value = g(key, value)
 		//fmt.Printf("delete %q\n", key)
-		ln := len(llrbdels)
+		ln := len(bogndels)
 		delidx, lsm := rnd.Intn(1000000)%ln, lsmmap[rnd.Intn(1000000)%2]
 		if lsm {
 			delidx = delidx % 2
 		}
 		for i := 2; i >= 0; i-- {
-			refcas, ok1 := llrbdels[delidx](index, key, value, lsm)
+			refcas, ok1 := bogndels[delidx](index, key, value, lsm)
 			oldvalue, _, _, ok2 := index.Get(key, oldvalue)
-			if vllrbdel(index, key, oldvalue, refcas, i, lsm, ok2) == "ok" {
+			if vbogndel(index, key, oldvalue, refcas, i, lsm, ok2) == "ok" {
 				if ok1 || lsm == true {
 					ndeletes++
 					atomic.AddInt64(&numentries, -1)
@@ -355,19 +354,18 @@ func llrbDeleter(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 		}
 
 		if x := ndeletes + xdeletes; x > 0 && (x%markercount) == 0 {
-			count := index.Count()
 			x := time.Since(now).Round(time.Second)
 			y := time.Since(epoch).Round(time.Second)
-			fmsg := "llrbDeleted {%v items in %v} {%v:%v items in %v} count:%v\n"
-			fmt.Printf(fmsg, markercount, x, ndeletes, xdeletes, y, count)
+			fmsg := "bognDeleted {%v items in %v} {%v:%v items in %v}\n"
+			fmt.Printf(fmsg, markercount, x, ndeletes, xdeletes, y)
 			now = time.Now()
 		}
 	}
-	fmsg := "at exit, llrbDeleter %v:%v items in %v\n"
+	fmsg := "at exit, bognDeleter %v:%v items in %v\n"
 	fmt.Printf(fmsg, ndeletes, xdeletes, time.Since(epoch))
 }
 
-func llrbDel1(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
+func bognDel1(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
 	oldvalue, cas := index.Delete(key, oldvalue, lsm)
@@ -379,7 +377,7 @@ func llrbDel1(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	return cas, ok
 }
 
-func llrbDel2(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
+func bognDel2(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
 	txn := index.BeginTxn(0xC0FFEE)
@@ -395,7 +393,7 @@ func llrbDel2(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	return 0, ok
 }
 
-func llrbDel3(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
+func bognDel3(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
 	txn := index.BeginTxn(0xC0FFEE)
@@ -415,7 +413,7 @@ func llrbDel3(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	return 0, ok
 }
 
-func llrbDel4(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
+func bognDel4(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
 	txn := index.BeginTxn(0xC0FFEE)
@@ -434,12 +432,12 @@ func llrbDel4(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	return 0, ok
 }
 
-var llrbgets = []func(x *llrb.LLRB, k, v []byte) ([]byte, uint64, bool, bool){
-	llrbGet1, llrbGet2, llrbGet3,
+var bogngets = []func(x *bogn.Bogn, k, v []byte) ([]byte, uint64, bool, bool){
+	bognGet1, bognGet2, bognGet3,
 }
 
-func llrbGetter(
-	index *llrb.LLRB, n, seedl, seedc int64,
+func bognGetter(
+	index *bogn.Bogn, n, seedl, seedc int64,
 	fin chan struct{}, wg *sync.WaitGroup) {
 
 	defer wg.Done()
@@ -457,8 +455,8 @@ loop:
 		ngets++
 		time.Sleep(10 * time.Microsecond)
 		key = g(key, atomic.LoadInt64(&ncreates))
-		ln := len(llrbgets)
-		value, _, del, _ = llrbgets[rnd.Intn(1000000)%ln](index, key, value)
+		ln := len(bogngets)
+		value, _, del, _ = bogngets[rnd.Intn(1000000)%ln](index, key, value)
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
 		} else if (int64(x) % 2) != delmod {
@@ -479,28 +477,28 @@ loop:
 		if ngm := ngets + nmisses; ngm%markercount == 0 {
 			x := time.Since(now).Round(time.Second)
 			y := time.Since(epoch).Round(time.Second)
-			fmsg := "llrbGetter {%v items in %v} {%v:%v items in %v}\n"
+			fmsg := "bognGetter {%v items in %v} {%v:%v items in %v}\n"
 			fmt.Printf(fmsg, markercount, x, ngets, nmisses, y)
 		}
 	}
 	duration := time.Since(epoch)
 	<-fin
-	fmsg := "at exit, llrbGetter %v:%v items in %v\n"
+	fmsg := "at exit, bognGetter %v:%v items in %v\n"
 	fmt.Printf(fmsg, ngets, nmisses, duration)
 }
 
-func llrbGet1(
-	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
+func bognGet1(
+	index *bogn.Bogn, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	//fmt.Printf("llrbGet1 %q\n", key)
-	//defer fmt.Printf("llrbGet1-abort %q\n", key)
+	//fmt.Printf("bognGet1 %q\n", key)
+	//defer fmt.Printf("bognGet1-abort %q\n", key)
 	return index.Get(key, value)
 }
 
-func llrbGet2(
-	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
+func bognGet2(
+	index *bogn.Bogn, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	//fmt.Printf("llrbGet2\n")
+	//fmt.Printf("bognGet2\n")
 	txn := index.BeginTxn(0xC0FFEE)
 	value, del, ok := txn.Get(key, value)
 	if ok == true {
@@ -516,13 +514,13 @@ func llrbGet2(
 			panic(fmt.Errorf("expected %q, got %q", value, cvalue))
 		}
 	}
-	//fmt.Printf("llrbGet2-abort\n")
+	//fmt.Printf("bognGet2-abort\n")
 	txn.Abort()
 	return value, 0, del, ok
 }
 
-func llrbGet3(
-	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
+func bognGet3(
+	index *bogn.Bogn, key, value []byte) ([]byte, uint64, bool, bool) {
 
 	view := index.View(0x1235)
 	value, del, ok := view.Get(key, value)
@@ -543,12 +541,12 @@ func llrbGet3(
 	return value, 0, del, ok
 }
 
-var llrbrngs = []func(index *llrb.LLRB, key, val []byte) int64{
-	llrbRange1, llrbRange2, llrbRange3, llrbRange4,
+var bognrngs = []func(index *bogn.Bogn, key, val []byte) int64{
+	bognRange1, bognRange2, bognRange3, bognRange4,
 }
 
-func llrbRanger(
-	index *llrb.LLRB, n, seedl, seedc int64,
+func bognRanger(
+	index *bogn.Bogn, n, seedl, seedc int64,
 	fin chan struct{}, wg *sync.WaitGroup) {
 
 	defer wg.Done()
@@ -563,8 +561,8 @@ loop:
 	for {
 		time.Sleep(10 * time.Microsecond)
 		key = g(key, atomic.LoadInt64(&ncreates))
-		ln := len(llrbrngs)
-		n := llrbrngs[rnd.Intn(1000000)%ln](index, key, value)
+		ln := len(bognrngs)
+		n := bognrngs[rnd.Intn(1000000)%ln](index, key, value)
 		nranges += n
 		select {
 		case <-fin:
@@ -574,11 +572,11 @@ loop:
 	}
 	duration := time.Since(epoch)
 	<-fin
-	fmt.Printf("at exit, llrbRanger %v items in %v\n", nranges, duration)
+	fmt.Printf("at exit, bognRanger %v items in %v\n", nranges, duration)
 }
 
-func llrbRange1(index *llrb.LLRB, key, value []byte) (n int64) {
-	//fmt.Printf("llrbRange1 %q\n", key)
+func bognRange1(index *bogn.Bogn, key, value []byte) (n int64) {
+	//fmt.Printf("bognRange1 %q\n", key)
 	txn := index.BeginTxn(0xC0FFEE)
 	cur, err := txn.OpenCursor(key)
 	if err != nil {
@@ -602,7 +600,7 @@ func llrbRange1(index *llrb.LLRB, key, value []byte) (n int64) {
 	return
 }
 
-func llrbRange2(index *llrb.LLRB, key, value []byte) (n int64) {
+func bognRange2(index *bogn.Bogn, key, value []byte) (n int64) {
 	txn := index.BeginTxn(0xC0FFEE)
 	cur, err := txn.OpenCursor(key)
 	if err != nil {
@@ -628,7 +626,7 @@ func llrbRange2(index *llrb.LLRB, key, value []byte) (n int64) {
 	return
 }
 
-func llrbRange3(index *llrb.LLRB, key, value []byte) (n int64) {
+func bognRange3(index *bogn.Bogn, key, value []byte) (n int64) {
 	view := index.View(0x1236)
 	cur, err := view.OpenCursor(key)
 	if err != nil {
@@ -654,7 +652,7 @@ func llrbRange3(index *llrb.LLRB, key, value []byte) (n int64) {
 	return
 }
 
-func llrbRange4(index *llrb.LLRB, key, value []byte) (n int64) {
+func bognRange4(index *bogn.Bogn, key, value []byte) (n int64) {
 	view := index.View(0x1237)
 	cur, err := view.OpenCursor(key)
 	if err != nil {

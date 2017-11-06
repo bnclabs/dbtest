@@ -48,5 +48,7 @@ func main() {
 		testmvcc()
 	case "bubt":
 		testbubt()
+	case "bogn":
+		testbogn()
 	}
 }
