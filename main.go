@@ -10,13 +10,16 @@ import "github.com/prataprc/golog"
 // TODO: add Validate for llrb and mvcc.
 
 var options struct {
-	db      string
-	path    string
-	entries int
-	writes  int
-	ops     int
-	keylen  int
-	seed    int
+	db       string
+	path     string
+	entries  int
+	writes   int
+	ops      int
+	keylen   int
+	bogn     string
+	memstore string
+	period   int
+	seed     int
 }
 
 func optparse(args []string) {
@@ -29,6 +32,9 @@ func optparse(args []string) {
 	f.IntVar(&options.ops, "ops", 10000000, "total number of operations")
 	f.IntVar(&options.keylen, "key", 32, "db path to open")
 	f.IntVar(&options.seed, "seed", 10, "seed value to generate randomness")
+	f.StringVar(&options.bogn, "bogn", "inmem", "inmem|durable|dgm|workset")
+	f.StringVar(&options.memstore, "memstore", "mvcc", "llrb|mvcc")
+	f.IntVar(&options.period, "period", 10, "flush period in seconds")
 	f.Parse(args)
 }
 

@@ -13,14 +13,18 @@ import "math/rand"
 
 import "github.com/prataprc/gostore/api"
 import "github.com/prataprc/gostore/bogn"
+import s "github.com/prataprc/gosettings"
 
 func testbogn() error {
-	setts := bogn.Defaultsettings()
+	setts := bognsettings(options.seed)
+	bogn.PurgeIndex("dbtest", setts)
+	fmt.Println(setts)
 	index, err := bogn.New("dbtest", setts)
 	if err != nil {
 		panic(err)
 	}
 	defer index.Destroy()
+	defer index.Close()
 
 	seedl, seedc := int64(options.seed), int64(options.seed)+100
 	fmt.Printf("Seed for load: %v, for ops: %v\n", seedl, seedc)
@@ -30,22 +34,22 @@ func testbogn() error {
 
 	//go bognvalidator(index, true /*log*/)
 
-	//var wwg, rwg sync.WaitGroup
-	////// writer routines
-	//n := atomic.LoadInt64(&numentries)
-	//go bognCreater(index, n, seedc, &wwg)
+	var wwg sync.WaitGroup
+	// writer routines
+	n := atomic.LoadInt64(&numentries)
+	go bognCreater(index, n, seedc, &wwg)
 	//go bognUpdater(index, n, seedl, seedc, &wwg)
 	//go bognDeleter(index, n, seedl, seedc, &wwg)
-	//wwg.Add(3)
+	wwg.Add(1)
 	//// reader routines
-	//fin := make(chan struct{})
+	fin := make(chan struct{})
 	//for i := 0; i < runtime.GOMAXPROCS(-1); i++ {
 	//	go bognGetter(index, n, seedl, seedc, fin, &rwg)
 	//	go bognRanger(index, n, seedl, seedc, fin, &rwg)
 	//	rwg.Add(2)
 	//}
-	//wwg.Wait()
-	//close(fin)
+	wwg.Wait()
+	close(fin)
 	//rwg.Wait()
 
 	index.Log()
@@ -59,20 +63,10 @@ func bognvalidator(index *bogn.Bogn, log bool) {
 
 		if log {
 			index.Log()
-			//m := index.Stats()
-			//fmt.Printf("count: %10d\n", m["n_count"])
-			//a, b, c := m["n_inserts"], m["n_updates"], m["n_deletes"]
-			//fmt.Printf("write: %10d %10d %10d\n", a, b, c)
-			//a, b, c = m["n_nodes"], m["n_frees"], m["n_clones"]
-			//fmt.Printf("nodes: %10d %10d %10d\n", a, b, c)
-			//a, b, c = m["n_txns"], m["n_commits"], m["n_aborts"]
-			//fmt.Printf("txns : %10d %10d %10d\n", a, b, c)
-			//a, b = m["keymemory"], m["valmemory"]
-			//fmt.Printf("reqm : %10d %10d\n", a, b)
 		}
 
 		now := time.Now()
-		//index.Validate()
+		index.Validate()
 		fmt.Printf("Took %v to validate index\n", time.Since(now))
 	}
 }
@@ -102,7 +96,7 @@ func bognLoad(index *bogn.Bogn, seedl int64) error {
 }
 
 var bognsets = []func(index *bogn.Bogn, key, val, oldval []byte) uint64{
-	bognSet1, bognSet2, bognSet3, bognSet4,
+	bognSet1, bognSet2, // bognSet3, bognSet4,
 }
 
 func bognCreater(index *bogn.Bogn, n, seedc int64, wg *sync.WaitGroup) {
@@ -116,7 +110,7 @@ func bognCreater(index *bogn.Bogn, n, seedc int64, wg *sync.WaitGroup) {
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		key, value = g(key, value)
-		setidx := rnd.Intn(1000000) % 4
+		setidx := rnd.Intn(1000000) % len(bognsets)
 		refcas := bognsets[setidx](index, key, value, oldvalue)
 		oldvalue, cas, del, ok := index.Get(key, oldvalue)
 		if ok == false {
@@ -270,7 +264,7 @@ func bognSet4(index *bogn.Bogn, key, value, oldvalue []byte) uint64 {
 }
 
 var bogndels = []func(*bogn.Bogn, []byte, []byte, bool) (uint64, bool){
-	bognDel1, bognDel2, bognDel3, bognDel4,
+	bognDel1, // bognDel2, bognDel3, bognDel4,
 }
 
 func vbogndel(
@@ -433,7 +427,7 @@ func bognDel4(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
 }
 
 var bogngets = []func(x *bogn.Bogn, k, v []byte) ([]byte, uint64, bool, bool){
-	bognGet1, bognGet2, bognGet3,
+	bognGet1, // bognGet2, bognGet3,
 }
 
 func bognGetter(
@@ -676,4 +670,38 @@ func bognRange4(index *bogn.Bogn, key, value []byte) (n int64) {
 	}
 	view.Abort()
 	return
+}
+
+func bognsettings(seed int) s.Settings {
+	rnd := rand.New(rand.NewSource(int64(seed)))
+	setts := bogn.Defaultsettings()
+	setts["memstore"] = options.memstore
+	setts["period"] = int64(options.period)
+	ratio := []float64{.5, .33, .25, .20, .16, .125, .1}[rnd.Intn(10000)%7]
+	setts["ratio"] = ratio
+	setts["bubt.mmap"] = []bool{true, false}[rnd.Intn(10000)%2]
+	setts["bubt.msize"] = []int64{4096, 8192, 12288}[rnd.Intn(10000)%3]
+	setts["bubt.zsize"] = []int64{4096, 8192, 12288}[rnd.Intn(10000)%3]
+	//setts["llrb.memcapacity"] = 10 * 1024 * 1024 * 1024
+	setts["llrb.allocator"] = "flist"
+	setts["llrb.snapshottick"] = []int64{4, 8, 16, 32}[rnd.Intn(10000)%4]
+	switch options.bogn {
+	case "inmem":
+		setts["durable"] = false
+		setts["dgm"] = false
+		setts["workingset"] = false
+	case "durable":
+		setts["durable"] = true
+		setts["dgm"] = false
+		setts["workingset"] = false
+	case "dgm":
+		setts["durable"] = true
+		setts["dgm"] = true
+		setts["workingset"] = false
+	case "workset":
+		setts["durable"] = true
+		setts["dgm"] = true
+		setts["workingset"] = true
+	}
+	return setts
 }
