@@ -32,9 +32,11 @@ func testbogn() error {
 		return err
 	}
 
-	//go bognvalidator(index, true /*log*/)
-
 	var wwg sync.WaitGroup
+	fin := make(chan struct{})
+
+	//go bognvalidator(index, true /*log*/, &rwg, fin)
+
 	// writer routines
 	n := atomic.LoadInt64(&numentries)
 	go bognCreater(index, n, seedc, &wwg)
@@ -42,7 +44,6 @@ func testbogn() error {
 	//go bognDeleter(index, n, seedl, seedc, &wwg)
 	wwg.Add(1)
 	//// reader routines
-	fin := make(chan struct{})
 	//for i := 0; i < runtime.GOMAXPROCS(-1); i++ {
 	//	go bognGetter(index, n, seedl, seedc, fin, &rwg)
 	//	go bognRanger(index, n, seedl, seedc, fin, &rwg)
@@ -56,10 +57,18 @@ func testbogn() error {
 	return nil
 }
 
-func bognvalidator(index *bogn.Bogn, log bool) {
+func bognvalidator(
+	index *bogn.Bogn, log bool, wg *sync.WaitGroup, fin chan struct{}) {
+
+	defer wg.Done()
+
 	tick := time.NewTicker(10 * time.Second)
 	for {
 		<-tick.C
+		select {
+		case <-fin:
+		default:
+		}
 
 		if log {
 			index.Log()

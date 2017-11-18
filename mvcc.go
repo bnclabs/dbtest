@@ -24,9 +24,12 @@ func testmvcc() error {
 		return err
 	}
 
-	go mvccvalidator(index, true /*log*/)
-
 	var wwg, rwg sync.WaitGroup
+	fin := make(chan struct{})
+
+	go mvccvalidator(index, true /*log*/, &rwg, fin)
+	rwg.Add(1)
+
 	//// writer routines
 	n := atomic.LoadInt64(&numentries)
 	go mvccCreater(index, n, seedc, &wwg)
@@ -34,7 +37,6 @@ func testmvcc() error {
 	go mvccDeleter(index, n, seedl, seedc, &wwg)
 	wwg.Add(3)
 	// reader routines
-	fin := make(chan struct{})
 	for i := 0; i < numcpus; i++ {
 		go mvccGetter(index, n, seedl, seedc, fin, &rwg)
 		go mvccRanger(index, n, seedl, seedc, fin, &rwg)
@@ -49,29 +51,22 @@ func testmvcc() error {
 	return nil
 }
 
-func mvccvalidator(index *llrb.MVCC, log bool) {
+func mvccvalidator(
+	index *llrb.MVCC, log bool, wg *sync.WaitGroup, fin chan struct{}) {
+
+	defer wg.Done()
+
 	tick := time.NewTicker(10 * time.Second)
 	for {
 		<-tick.C
+		select {
+		case <-fin:
+			return
+		default:
+		}
 
 		if log {
 			index.Log()
-			m := index.Stats()
-			fmt.Printf("count: %10d\n", m["n_count"])
-			a, b, c := m["n_inserts"], m["n_updates"], m["n_deletes"]
-			fmt.Printf("write: %10d %10d %10d\n", a, b, c)
-			a, b, c = m["n_nodes"], m["n_frees"], m["n_clones"]
-			fmt.Printf("nodes: %10d %10d %10d\n", a, b, c)
-			a, b, c = m["n_txns"], m["n_commits"], m["n_aborts"]
-			fmt.Printf("txns : %10d %10d %10d\n", a, b, c)
-			a, b = m["keymemory"], m["valmemory"]
-			fmt.Printf("reqm : %10d %10d\n", a, b)
-			a, b, c, d := m["n_reclaims"], m["n_snapshots"], m["n_purgedss"], m["n_activess"]
-			fmt.Printf("mvcc : %10d %10d %10d %10d\n", a, b, c, d)
-			//m["h_upsertdepth"]
-			//m["h_bulkfree"]
-			//m["h_reclaims"]
-			//m["h_versions"]
 		}
 
 		now := time.Now()
@@ -120,7 +115,7 @@ func mvccCreater(index *llrb.MVCC, n, seedc int64, wg *sync.WaitGroup) {
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		key, value = g(key, value)
-		setidx := rnd.Intn(1000000) % 4
+		setidx := rnd.Intn(1000000) % len(mvccsets)
 		refcas := mvccsets[setidx](index, key, value, oldvalue)
 		oldvalue, cas, del, ok := index.Get(key, oldvalue)
 		if ok == false {
@@ -183,7 +178,7 @@ func mvccUpdater(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		key, value = g(key, value)
-		setidx := rnd.Intn(1000000) % 4
+		setidx := rnd.Intn(1000000) % len(mvccsets)
 		for i := 2; i >= 0; i-- {
 			refcas := mvccsets[setidx](index, key, value, oldvalue)
 			oldvalue, cas, del, ok := index.Get(key, oldvalue)

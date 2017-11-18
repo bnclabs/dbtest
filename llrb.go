@@ -24,9 +24,12 @@ func testllrb() error {
 		return err
 	}
 
-	go llrbvalidator(index, true /*log*/)
-
 	var wwg, rwg sync.WaitGroup
+	fin := make(chan struct{})
+
+	go llrbvalidator(index, true /*log*/, &rwg, fin)
+	rwg.Add(1)
+
 	//// writer routines
 	n := atomic.LoadInt64(&numentries)
 	go llrbCreater(index, n, seedc, &wwg)
@@ -34,7 +37,6 @@ func testllrb() error {
 	go llrbDeleter(index, n, seedl, seedc, &wwg)
 	wwg.Add(3)
 	// reader routines
-	fin := make(chan struct{})
 	for i := 0; i < runtime.GOMAXPROCS(-1); i++ {
 		go llrbGetter(index, n, seedl, seedc, fin, &rwg)
 		go llrbRanger(index, n, seedl, seedc, fin, &rwg)
@@ -49,23 +51,22 @@ func testllrb() error {
 	return nil
 }
 
-func llrbvalidator(index *llrb.LLRB, log bool) {
+func llrbvalidator(
+	index *llrb.LLRB, log bool, wg *sync.WaitGroup, fin chan struct{}) {
+
+	defer wg.Done()
+
 	tick := time.NewTicker(10 * time.Second)
 	for {
 		<-tick.C
+		select {
+		case <-fin:
+			return
+		default:
+		}
 
 		if log {
 			index.Log()
-			m := index.Stats()
-			fmt.Printf("count: %10d\n", m["n_count"])
-			a, b, c := m["n_inserts"], m["n_updates"], m["n_deletes"]
-			fmt.Printf("write: %10d %10d %10d\n", a, b, c)
-			a, b, c = m["n_nodes"], m["n_frees"], m["n_clones"]
-			fmt.Printf("nodes: %10d %10d %10d\n", a, b, c)
-			a, b, c = m["n_txns"], m["n_commits"], m["n_aborts"]
-			fmt.Printf("txns : %10d %10d %10d\n", a, b, c)
-			a, b = m["keymemory"], m["valmemory"]
-			fmt.Printf("reqm : %10d %10d\n", a, b)
 		}
 
 		now := time.Now()
