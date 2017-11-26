@@ -46,7 +46,8 @@ func testmvcc() error {
 	close(fin)
 	rwg.Wait()
 
-	fmt.Printf("LMDB total indexed %v items\n", index.Count())
+	fmt.Printf("MVCC total indexed %v items\n", index.Count())
+	fmt.Printf("Number of ROLLBACKS: %v\n", rollbacks)
 
 	return nil
 }
@@ -257,7 +258,7 @@ func mvccSet3(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
 		} else if err.Error() == api.ErrorRollback.Error() {
 			atomic.AddInt64(&rollbacks, 1)
 		}
-		time.Sleep(100 * time.Microsecond)
+		time.Sleep(time.Duration(rand.Intn(10)) * time.Millisecond)
 	}
 	return 0
 }
@@ -282,7 +283,7 @@ func mvccSet4(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
 		} else if err.Error() == api.ErrorRollback.Error() {
 			atomic.AddInt64(&rollbacks, 1)
 		}
-		time.Sleep(100 * time.Microsecond)
+		time.Sleep(time.Duration(rand.Intn(10)) * time.Millisecond)
 	}
 	return 0
 }
@@ -411,7 +412,7 @@ func mvccDel2(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 		} else if err.Error() == api.ErrorRollback.Error() {
 			atomic.AddInt64(&rollbacks, 1)
 		}
-		time.Sleep(100 * time.Microsecond)
+		time.Sleep(time.Duration(rand.Intn(10)) * time.Millisecond)
 	}
 	return 0, ok
 }
@@ -439,7 +440,7 @@ func mvccDel3(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 		} else if err.Error() == api.ErrorRollback.Error() {
 			atomic.AddInt64(&rollbacks, 1)
 		}
-		time.Sleep(100 * time.Microsecond)
+		time.Sleep(time.Duration(rand.Intn(10)) * time.Millisecond)
 	}
 	return 0, ok
 }
@@ -466,7 +467,7 @@ func mvccDel4(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 		} else if err.Error() == api.ErrorRollback.Error() {
 			atomic.AddInt64(&rollbacks, 1)
 		}
-		time.Sleep(100 * time.Microsecond)
+		time.Sleep(time.Duration(rand.Intn(10)) * time.Millisecond)
 	}
 	return 0, ok
 }
