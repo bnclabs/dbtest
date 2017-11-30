@@ -1,2 +1,7 @@
-echo "rm dbtest; go build; ./dbtest -db bubt -n 1000000 -seed 1019"
-rm dbtest; go build; ./dbtest -db bubt -n 1000000 -seed 1019
+rm dbtest
+go build
+
+cmdargs="-db llrb -load 1000000 -writes 4000000"
+
+echo "./dbtest $cmdargs"
+./dbtest $cmdargs

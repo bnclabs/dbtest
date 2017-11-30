@@ -47,6 +47,7 @@ func testllrb() error {
 	rwg.Wait()
 
 	count, n := index.Count(), atomic.LoadInt64(&numentries)
+	fmt.Printf("LLRB write conflicts %v\n", conflicts)
 	fmt.Printf("LLRB total indexed %v items, expected %v\n", count, n)
 
 	return nil
@@ -345,12 +346,18 @@ func llrbDeleter(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 			refcas, ok1 := llrbdels[delidx](index, key, value, lsm)
 			oldvalue, _, _, ok2 := index.Get(key, oldvalue)
 			if vllrbdel(index, key, oldvalue, refcas, i, lsm, ok2) == "ok" {
-				if ok1 || lsm == true {
-					ndeletes++
-					atomic.AddInt64(&numentries, -1)
-					atomic.AddInt64(&totalwrites, 1)
-				} else {
+				if ok1 == false && lsm == false {
 					xdeletes++
+				} else if ok1 == false && lsm == true {
+					ndeletes++
+					atomic.AddInt64(&totalwrites, 1)
+				} else if ok1 == true && lsm == false {
+					ndeletes++
+					atomic.AddInt64(&totalwrites, 1)
+					atomic.AddInt64(&numentries, -1)
+				} else if ok1 == true && lsm == true {
+					ndeletes++
+					atomic.AddInt64(&totalwrites, 1)
 				}
 				break
 			}
@@ -360,7 +367,7 @@ func llrbDeleter(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 			count := index.Count()
 			x := time.Since(now).Round(time.Second)
 			y := time.Since(epoch).Round(time.Second)
-			fmsg := "llrbDeleted {%v items in %v} {%v:%v items in %v} count:%v\n"
+			fmsg := "llrbDeleted {%v items %v} {%v:%v items in %v} count:%v\n"
 			fmt.Printf(fmsg, markercount, x, ndeletes, xdeletes, y, count)
 			now = time.Now()
 		}
