@@ -14,7 +14,6 @@ import "github.com/prataprc/golog"
 var options struct {
 	db       string
 	cpu      int
-	path     string
 	load     int
 	writes   int
 	reads    int
@@ -32,7 +31,6 @@ func optparse(args []string) {
 
 	f.StringVar(&options.db, "db", "llrb", "lmdb|llrb|mvcc|bubt|bogn store type")
 	f.IntVar(&options.cpu, "cpu", cpu, "lmdb|llrb|mvcc|bubt|bogn store type")
-	f.StringVar(&options.path, "path", "", "db path to open")
 	f.IntVar(&options.load, "load", 1000000, "number of entries to load initially")
 	f.IntVar(&options.writes, "writes", 10000000, "total number of writes")
 	f.IntVar(&options.reads, "reads", 10000000, "total number of read operations")

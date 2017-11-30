@@ -7,16 +7,19 @@ import "time"
 import "bytes"
 import "strings"
 import "strconv"
+import "path/filepath"
 import "sync/atomic"
 import "math/rand"
 
 import "github.com/prataprc/golog"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 
+var lmdbpath string
+
 func testlmdb() error {
-	options.path = lmdbpath()
+	lmdbpath = makelmdbpath()
 	defer func() {
-		if err := os.RemoveAll(options.path); err != nil {
+		if err := os.RemoveAll(lmdbpath); err != nil {
 			log.Errorf("%v", err)
 		}
 	}()
@@ -78,7 +81,7 @@ func initlmdb(envflags uint) (env *lmdb.Env, dbi lmdb.DBI, err error) {
 	// NoMetaSync Don't fsync metapage after commit.
 	// NoSync     Don't fsync after commit.
 	// MapAsync   Flush asynchronously when using the WriteMap flag.
-	err = env.Open(options.path, envflags, 0755)
+	err = env.Open(lmdbpath, envflags, 0755)
 	if err != nil {
 		log.Errorf("%v", err)
 		return
@@ -124,7 +127,7 @@ func readlmdb(envflags uint) (*lmdb.Env, lmdb.DBI, error) {
 	// NoMetaSync Don't fsync metapage after commit.
 	// NoSync     Don't fsync after commit.
 	// MapAsync   Flush asynchronously when using the WriteMap flag.
-	err = env.Open(options.path, envflags, 0755)
+	err = env.Open(lmdbpath, envflags, 0755)
 	if err != nil {
 		env.Close()
 		log.Errorf("%v", err)
@@ -425,14 +428,13 @@ loop:
 	fmt.Printf(fmsg, nranges, nmisses, duration)
 }
 
-func lmdbpath() string {
-	if options.path == "" {
-		options.path = "testdata/lmdb.data"
-	}
-	if err := os.MkdirAll(options.path, 0775); err != nil {
+func makelmdbpath() string {
+	path := filepath.Join(os.TempDir(), "lmdb.data")
+	os.RemoveAll(path)
+	if err := os.MkdirAll(path, 0775); err != nil {
 		panic(err)
 	}
-	return options.path
+	return path
 }
 
 func getlmdbCount(env *lmdb.Env, dbi lmdb.DBI) (count uint64) {
