@@ -32,9 +32,9 @@ func testbubt() error {
 		panic(err)
 	}
 
-	klen, vlen := int64(options.keylen), int64(options.keylen)
-	seed, n := int64(options.seed), int64(options.entries)
-	iter := makeiterator(klen, vlen, n, delmod)
+	klen, vlen := int64(options.keylen), int64(options.vallen)
+	seed := int64(options.seed)
+	iter := makeiterator(klen, vlen, int64(options.load), delmod)
 	md := generatemeta(seed)
 
 	fmsg := "msize: %v zsize:%v mmap:%v mdsize:%v\n"
@@ -42,7 +42,7 @@ func testbubt() error {
 
 	now := time.Now()
 	bt.Build(iter, md)
-	fmt.Printf("Took %v to build %v entries\n", time.Since(now), n)
+	fmt.Printf("Took %v to build %v entries\n", time.Since(now), options.load)
 	bt.Close()
 
 	index, err := bubt.OpenSnapshot(name, paths, mmap)
@@ -52,16 +52,16 @@ func testbubt() error {
 	defer index.Destroy()
 	defer index.Close()
 
-	if index.Count() != n {
-		panic(fmt.Errorf("expected %v, got %v", n, index.Count()))
+	if index.Count() != int64(options.load) {
+		panic(fmt.Errorf("expected %v, got %v", options.load, index.Count()))
 	} else if index.ID() != name {
 		panic(fmt.Errorf("expected %v, got %v", name, index.ID()))
 	}
 
 	var rwg sync.WaitGroup
 	for i := 0; i < runtime.GOMAXPROCS(-1); i++ {
-		go bubtGetter(index, n, seed, &rwg)
-		go bubtRanger(index, n, seed, &rwg)
+		go bubtGetter(index, int64(options.load), seed, &rwg)
+		go bubtRanger(index, int64(options.load), seed, &rwg)
 		rwg.Add(2)
 	}
 	rwg.Wait()
@@ -112,7 +112,7 @@ loop:
 			fmt.Printf(fmsg, markercount, x, ngets, nmisses, y)
 		}
 
-		if atomic.AddInt64(&totalreads, 1) > int64(options.ops) {
+		if atomic.AddInt64(&totalreads, 1) > int64(options.reads) {
 			break loop
 		}
 	}
@@ -169,7 +169,7 @@ loop:
 		n := bubtrngs[rnd.Intn(1000000)%ln](index, key, value)
 		nranges += n
 
-		if atomic.AddInt64(&totalreads, 1) > int64(options.ops) {
+		if atomic.AddInt64(&totalreads, 1) > int64(options.reads) {
 			break loop
 		}
 	}

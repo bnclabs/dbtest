@@ -46,7 +46,8 @@ func testmvcc() error {
 	close(fin)
 	rwg.Wait()
 
-	fmt.Printf("MVCC total indexed %v items\n", index.Count())
+	count, n := index.Count(), atomic.LoadInt64(&numentries)
+	fmt.Printf("MVCC total indexed %v items, expected %v\n", count, n)
 	fmt.Printf("Number of ROLLBACKS: %v\n", rollbacks)
 
 	return nil
@@ -77,12 +78,8 @@ func mvccvalidator(
 }
 
 func mvccLoad(index *llrb.MVCC, seedl int64) error {
-	klen, vlen := int64(options.keylen), int64(options.keylen)
-	n := int64(options.entries / 2)
-	if n > 1000000 {
-		n = 1000000
-	}
-	g := Generateloadr(klen, vlen, n, int64(seedl))
+	klen, vlen := int64(options.keylen), int64(options.vallen)
+	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
 
 	key, value := make([]byte, 16), make([]byte, 16)
 	now, oldvalue := time.Now(), make([]byte, 16)
@@ -93,14 +90,14 @@ func mvccLoad(index *llrb.MVCC, seedl int64) error {
 			panic(fmt.Errorf("unexpected %q", oldvalue))
 		}
 	}
-	atomic.AddInt64(&numentries, n)
-	atomic.AddInt64(&totalwrites, n)
+	atomic.AddInt64(&numentries, int64(options.load))
+	atomic.AddInt64(&totalwrites, int64(options.load))
 
-	fmt.Printf("Loaded %v items in %v\n", n, time.Since(now))
+	fmt.Printf("Loaded %v items in %v\n", options.load, time.Since(now))
 	return nil
 }
 
-var mvccsets = []func(index *llrb.MVCC, key, val, oldval []byte) uint64{
+var mvccsets = []func(index *llrb.MVCC, k, v, ov []byte) (uint64, []byte){
 	mvccSet1, mvccSet2, mvccSet3, mvccSet4,
 }
 
@@ -108,7 +105,7 @@ func mvccCreater(index *llrb.MVCC, n, seedc int64, wg *sync.WaitGroup) {
 	time.Sleep(100 * time.Millisecond)
 	defer wg.Done()
 
-	klen, vlen := int64(options.keylen), int64(options.keylen)
+	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generatecreate(klen, vlen, n, seedc)
 
 	key, value := make([]byte, 16), make([]byte, 16)
@@ -117,7 +114,7 @@ func mvccCreater(index *llrb.MVCC, n, seedc int64, wg *sync.WaitGroup) {
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		key, value = g(key, value)
 		setidx := rnd.Intn(1000000) % len(mvccsets)
-		refcas := mvccsets[setidx](index, key, value, oldvalue)
+		refcas, _ := mvccsets[setidx](index, key, value, oldvalue)
 		oldvalue, cas, del, ok := index.Get(key, oldvalue)
 		if ok == false {
 			panic("unexpected false")
@@ -172,7 +169,7 @@ func mvccUpdater(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	var nupdates int64
 	var key, value []byte
-	klen, vlen := int64(options.keylen), int64(options.keylen)
+	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generateupdate(klen, vlen, n, seedl, seedc, -1)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
@@ -181,7 +178,10 @@ func mvccUpdater(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 		key, value = g(key, value)
 		setidx := rnd.Intn(1000000) % len(mvccsets)
 		for i := 2; i >= 0; i-- {
-			refcas := mvccsets[setidx](index, key, value, oldvalue)
+			refcas, oldvalue := mvccsets[setidx](index, key, value, oldvalue)
+			if len(oldvalue) == 0 {
+				atomic.AddInt64(&numentries, 1)
+			}
 			oldvalue, cas, del, ok := index.Get(key, oldvalue)
 			if vmvccupdater(key, oldvalue, refcas, cas, i, del, ok) == "ok" {
 				break
@@ -201,13 +201,13 @@ func mvccUpdater(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	fmt.Printf(fmsg, nupdates, time.Since(epoch))
 }
 
-func mvccSet1(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
+func mvccSet1(index *llrb.MVCC, key, value, oldvalue []byte) (uint64, []byte) {
 	oldvalue, cas := index.Set(key, value, oldvalue)
 	//fmt.Printf("update1 %q %q %q \n", key, value, oldvalue)
 	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
 		panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
 	}
-	return cas
+	return cas, oldvalue
 }
 
 func mvccverifyset2(err error, i int, key, oldvalue []byte) string {
@@ -223,7 +223,7 @@ func mvccverifyset2(err error, i int, key, oldvalue []byte) string {
 	return "ok"
 }
 
-func mvccSet2(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
+func mvccSet2(index *llrb.MVCC, key, value, oldvalue []byte) (uint64, []byte) {
 	for i := 3; i >= 0; i-- {
 		oldvalue, oldcas, deleted, ok := index.Get(key, oldvalue)
 		if deleted || ok == false {
@@ -236,13 +236,13 @@ func mvccSet2(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
 		oldvalue, cas, err := index.SetCAS(key, value, oldvalue, oldcas)
 		//fmt.Printf("mvccSet2 %q %q %v %v\n", key, value, oldcas, err)
 		if mvccverifyset2(err, i, key, oldvalue) == "ok" {
-			return cas
+			return cas, oldvalue
 		}
 	}
 	panic("unreachable code")
 }
 
-func mvccSet3(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
+func mvccSet3(index *llrb.MVCC, key, value, oldvalue []byte) (uint64, []byte) {
 	for i := numcpus * 2; i >= 0; i-- {
 		txn := index.BeginTxn(0xC0FFEE)
 		oldvalue = txn.Set(key, value, oldvalue)
@@ -252,7 +252,7 @@ func mvccSet3(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
 		}
 		err := txn.Commit()
 		if err == nil {
-			return 0
+			return 0, oldvalue
 		} else if i == 0 {
 			panic(err)
 		} else if err.Error() == api.ErrorRollback.Error() {
@@ -260,10 +260,10 @@ func mvccSet3(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
 		}
 		time.Sleep(time.Duration(rand.Intn(10)) * time.Millisecond)
 	}
-	return 0
+	return 0, oldvalue
 }
 
-func mvccSet4(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
+func mvccSet4(index *llrb.MVCC, key, value, oldvalue []byte) (uint64, []byte) {
 	for i := numcpus * 2; i >= 0; i-- {
 		txn := index.BeginTxn(0xC0FFEE)
 		cur, err := txn.OpenCursor(key)
@@ -277,7 +277,7 @@ func mvccSet4(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
 		}
 		err = txn.Commit()
 		if err == nil {
-			return 0
+			return 0, oldvalue
 		} else if i == 0 {
 			panic(err)
 		} else if err.Error() == api.ErrorRollback.Error() {
@@ -285,7 +285,7 @@ func mvccSet4(index *llrb.MVCC, key, value, oldvalue []byte) uint64 {
 		}
 		time.Sleep(time.Duration(rand.Intn(10)) * time.Millisecond)
 	}
-	return 0
+	return 0, oldvalue
 }
 
 var mvccdels = []func(*llrb.MVCC, []byte, []byte, bool) (uint64, bool){
@@ -338,7 +338,7 @@ func mvccDeleter(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	var ndeletes, xdeletes int64
 	var key, value []byte
-	klen, vlen := int64(options.keylen), int64(options.keylen)
+	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generatedelete(klen, vlen, n, seedl, seedc, delmod)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))

@@ -46,7 +46,8 @@ func testllrb() error {
 	close(fin)
 	rwg.Wait()
 
-	fmt.Printf("LLRB total indexed %v items\n", index.Count())
+	count, n := index.Count(), atomic.LoadInt64(&numentries)
+	fmt.Printf("LLRB total indexed %v items, expected %v\n", count, n)
 
 	return nil
 }
@@ -76,12 +77,8 @@ func llrbvalidator(
 }
 
 func llrbLoad(index *llrb.LLRB, seedl int64) error {
-	klen, vlen := int64(options.keylen), int64(options.keylen)
-	n := int64(options.entries / 2)
-	if n > 1000000 {
-		n = 1000000
-	}
-	g := Generateloadr(klen, vlen, n, int64(seedl))
+	klen, vlen := int64(options.keylen), int64(options.vallen)
+	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
 
 	key, value := make([]byte, 16), make([]byte, 16)
 	now, oldvalue := time.Now(), make([]byte, 16)
@@ -92,21 +89,21 @@ func llrbLoad(index *llrb.LLRB, seedl int64) error {
 			panic(fmt.Errorf("unexpected %q", oldvalue))
 		}
 	}
-	atomic.AddInt64(&numentries, n)
-	atomic.AddInt64(&totalwrites, n)
+	atomic.AddInt64(&numentries, int64(options.load))
+	atomic.AddInt64(&totalwrites, int64(options.load))
 
-	fmt.Printf("Loaded %v items in %v\n", n, time.Since(now))
+	fmt.Printf("Loaded %v items in %v\n", options.load, time.Since(now))
 	return nil
 }
 
-var llrbsets = []func(index *llrb.LLRB, key, val, oldval []byte) uint64{
+var llrbsets = []func(index *llrb.LLRB, k, v, ov []byte) (uint64, []byte){
 	llrbSet1, llrbSet2, llrbSet3, llrbSet4,
 }
 
 func llrbCreater(index *llrb.LLRB, n, seedc int64, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	klen, vlen := int64(options.keylen), int64(options.keylen)
+	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generatecreate(klen, vlen, n, seedc)
 
 	key, value := make([]byte, 16), make([]byte, 16)
@@ -115,7 +112,7 @@ func llrbCreater(index *llrb.LLRB, n, seedc int64, wg *sync.WaitGroup) {
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		key, value = g(key, value)
 		setidx := rnd.Intn(1000000) % 4
-		refcas := llrbsets[setidx](index, key, value, oldvalue)
+		refcas, _ := llrbsets[setidx](index, key, value, oldvalue)
 		oldvalue, cas, del, ok := index.Get(key, oldvalue)
 		if ok == false {
 			panic("unexpected false")
@@ -168,7 +165,7 @@ func llrbUpdater(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	var nupdates int64
 	var key, value []byte
-	klen, vlen := int64(options.keylen), int64(options.keylen)
+	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generateupdate(klen, vlen, n, seedl, seedc, -1)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
@@ -177,7 +174,10 @@ func llrbUpdater(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 		key, value = g(key, value)
 		setidx := rnd.Intn(1000000) % 4
 		for i := 2; i >= 0; i-- {
-			refcas := llrbsets[setidx](index, key, value, oldvalue)
+			refcas, oldvalue := llrbsets[setidx](index, key, value, oldvalue)
+			if len(oldvalue) == 0 {
+				atomic.AddInt64(&numentries, 1)
+			}
 			oldvalue, cas, del, ok := index.Get(key, oldvalue)
 			if vllrbupdater(key, oldvalue, refcas, cas, i, del, ok) == "ok" {
 				break
@@ -187,9 +187,10 @@ func llrbUpdater(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 		atomic.AddInt64(&totalwrites, 1)
 		if nupdates = nupdates + 1; nupdates%markercount == 0 {
 			count := index.Count()
-			x, y := time.Since(now).Round(time.Second), time.Since(epoch)
+			x := time.Since(now).Round(time.Second)
+			y := time.Since(epoch).Round(time.Second)
 			fmsg := "llrbUpdated {%v items in %v} {%v items in %v} count:%v\n"
-			fmt.Printf(fmsg, markercount, x, nupdates, y.Round(time.Second), count)
+			fmt.Printf(fmsg, markercount, x, nupdates, y, count)
 			now = time.Now()
 		}
 	}
@@ -197,13 +198,13 @@ func llrbUpdater(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	fmt.Printf(fmsg, nupdates, time.Since(epoch))
 }
 
-func llrbSet1(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
+func llrbSet1(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
 	oldvalue, cas := index.Set(key, value, oldvalue)
 	//fmt.Printf("update1 %q %q %q \n", key, value, oldvalue)
 	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
 		panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
 	}
-	return cas
+	return cas, oldvalue
 }
 
 func llrbverifyset2(err error, i int, key, oldvalue []byte) string {
@@ -220,7 +221,7 @@ func llrbverifyset2(err error, i int, key, oldvalue []byte) string {
 	return "ok"
 }
 
-func llrbSet2(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
+func llrbSet2(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
 	for i := 2; i >= 0; i-- {
 		oldvalue, oldcas, deleted, ok := index.Get(key, oldvalue)
 		if deleted || ok == false {
@@ -233,13 +234,13 @@ func llrbSet2(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
 		oldvalue, cas, err := index.SetCAS(key, value, oldvalue, oldcas)
 		//fmt.Printf("update2 %q %q %q \n", key, value, oldvalue)
 		if llrbverifyset2(err, i, key, oldvalue) == "ok" {
-			return cas
+			return cas, oldvalue
 		}
 	}
 	panic("unreachable code")
 }
 
-func llrbSet3(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
+func llrbSet3(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
 	txn := index.BeginTxn(0xC0FFEE)
 	oldvalue = txn.Set(key, value, oldvalue)
 	//fmt.Printf("update3 %q %q %q \n", key, value, oldvalue)
@@ -249,10 +250,10 @@ func llrbSet3(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
 	if err := txn.Commit(); err != nil {
 		panic(err)
 	}
-	return 0
+	return 0, oldvalue
 }
 
-func llrbSet4(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
+func llrbSet4(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
 	txn := index.BeginTxn(0xC0FFEE)
 	cur, err := txn.OpenCursor(key)
 	if err != nil {
@@ -266,7 +267,7 @@ func llrbSet4(index *llrb.LLRB, key, value, oldvalue []byte) uint64 {
 	if err := txn.Commit(); err != nil {
 		panic(err)
 	}
-	return 0
+	return 0, oldvalue
 }
 
 var llrbdels = []func(*llrb.LLRB, []byte, []byte, bool) (uint64, bool){
@@ -326,7 +327,7 @@ func llrbDeleter(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	var ndeletes, xdeletes int64
 	var key, value []byte
-	klen, vlen := int64(options.keylen), int64(options.keylen)
+	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generatedelete(klen, vlen, n, seedl, seedc, delmod)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))

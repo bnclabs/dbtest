@@ -81,12 +81,8 @@ func bognvalidator(
 }
 
 func bognLoad(index *bogn.Bogn, seedl int64) error {
-	klen, vlen := int64(options.keylen), int64(options.keylen)
-	n := int64(options.entries / 2)
-	if n > 1000000 {
-		n = 1000000
-	}
-	g := Generateloadr(klen, vlen, n, int64(seedl))
+	klen, vlen := int64(options.keylen), int64(options.vallen)
+	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
 
 	key, value := make([]byte, 16), make([]byte, 16)
 	now, oldvalue := time.Now(), make([]byte, 16)
@@ -97,10 +93,10 @@ func bognLoad(index *bogn.Bogn, seedl int64) error {
 			panic(fmt.Errorf("unexpected %q", oldvalue))
 		}
 	}
-	atomic.AddInt64(&numentries, n)
-	atomic.AddInt64(&totalwrites, n)
+	atomic.AddInt64(&numentries, int64(options.load))
+	atomic.AddInt64(&totalwrites, int64(options.load))
 
-	fmt.Printf("Loaded %v items in %v\n", n, time.Since(now))
+	fmt.Printf("Loaded %v items in %v\n", options.load, time.Since(now))
 	return nil
 }
 
@@ -111,7 +107,7 @@ var bognsets = []func(index *bogn.Bogn, key, val, oldval []byte) uint64{
 func bognCreater(index *bogn.Bogn, n, seedc int64, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	klen, vlen := int64(options.keylen), int64(options.keylen)
+	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generatecreate(klen, vlen, n, seedc)
 
 	key, value := make([]byte, 16), make([]byte, 16)
@@ -172,7 +168,7 @@ func bognUpdater(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	var nupdates int64
 	var key, value []byte
-	klen, vlen := int64(options.keylen), int64(options.keylen)
+	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generateupdate(klen, vlen, n, seedl, seedc, -1)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
@@ -327,7 +323,7 @@ func bognDeleter(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	var ndeletes, xdeletes int64
 	var key, value []byte
-	klen, vlen := int64(options.keylen), int64(options.keylen)
+	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generatedelete(klen, vlen, n, seedl, seedc, delmod)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))

@@ -5,7 +5,7 @@ import "fmt"
 import "sync"
 import "time"
 import "bytes"
-import "runtime"
+import "strings"
 import "strconv"
 import "sync/atomic"
 import "math/rand"
@@ -42,7 +42,7 @@ func testlmdb() error {
 	wwg.Add(3)
 	// reader routines
 	fin := make(chan struct{})
-	for i := 0; i < runtime.GOMAXPROCS(-1); i++ {
+	for i := 0; i < options.cpu; i++ {
 		go lmdbGetter(n, seedl, seedc, fin, &rwg)
 		go lmdbRanger(n, seedl, seedc, fin, &rwg)
 		rwg.Add(2)
@@ -51,7 +51,8 @@ func testlmdb() error {
 	close(fin)
 	rwg.Wait()
 
-	fmt.Printf("LMDB total indexed %v items\n", getlmdbCount(env, dbi))
+	count, numentries := getlmdbCount(env, dbi), atomic.LoadInt64(&numentries)
+	fmt.Printf("LMDB total indexed %v items, expected %v\n", count, numentries)
 
 	return nil
 }
@@ -147,12 +148,8 @@ func lmdbLoad(env *lmdb.Env, dbi lmdb.DBI, seedl int64) error {
 
 	now := time.Now()
 
-	klen, vlen := int64(options.keylen), int64(options.keylen)
-	n := int64(options.entries / 2)
-	if n > 1000000 {
-		n = 1000000
-	}
-	g := Generateloadr(klen, vlen, n, int64(seedl))
+	klen, vlen := int64(options.keylen), int64(options.vallen)
+	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
 
 	populate := func(txn *lmdb.Txn) (err error) {
 		key, value = g(key, value)
@@ -170,10 +167,10 @@ func lmdbLoad(env *lmdb.Env, dbi lmdb.DBI, seedl int64) error {
 		log.Errorf("key %q err : %v", key, err)
 		return err
 	}
-	atomic.AddInt64(&numentries, n)
-	atomic.AddInt64(&totalwrites, n)
+	atomic.AddInt64(&numentries, int64(options.load))
+	atomic.AddInt64(&totalwrites, int64(options.load))
 
-	fmt.Printf("Loaded %v items in %v\n", n, time.Since(now))
+	fmt.Printf("Loaded %v items in %v\n", options.load, time.Since(now))
 	return nil
 }
 
@@ -183,7 +180,7 @@ func lmdbCreater(
 	defer wg.Done()
 
 	var key, value []byte
-	klen, vlen := int64(options.keylen), int64(options.keylen)
+	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generatecreate(klen, vlen, n, seedc)
 
 	put := func(txn *lmdb.Txn) (err error) {
@@ -227,13 +224,16 @@ func lmdbUpdater(
 
 	var nupdates int64
 	var key, value []byte
-	klen, vlen := int64(options.keylen), int64(options.keylen)
+	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generateupdate(klen, vlen, n, seedl, seedc, -1)
 
+	missingerr := "No matching key/data pair found"
 	update := func(txn *lmdb.Txn) (err error) {
-		//if "00000000000000000000000000699067" == string(key) {
-		//	fmt.Println("update", string(key), string(value))
-		//}
+		value, err := txn.Get(dbi, key)
+		if err != nil && strings.Contains(err.Error(), missingerr) {
+			atomic.AddInt64(&numentries, 1)
+		}
+
 		if err := txn.Put(dbi, key, value, 0); err != nil {
 			return err
 		}
@@ -266,7 +266,7 @@ func lmdbDeleter(
 
 	var xdeletes, ndeletes int64
 	var key, value []byte
-	klen, vlen := int64(options.keylen), int64(options.keylen)
+	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generatedelete(klen, vlen, n, seedl, seedc, delmod)
 
 	delete := func(txn *lmdb.Txn) (err error) {
@@ -324,7 +324,7 @@ func lmdbGetter(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
 		value, err := txn.Get(dbi, key)
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
-		} else if (int64(x) % delmod) != 0 {
+		} else if (int64(x) % updtdel) != delmod {
 			if err != nil {
 				return err
 			} else if bytes.Compare(key, value) != 0 {
@@ -392,7 +392,7 @@ func lmdbRanger(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
 				return nil
 			} else if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 				panic(xerr)
-			} else if (int64(x) % delmod) != 0 {
+			} else if (int64(x) % updtdel) != delmod {
 				if err != nil {
 					return err
 				} else if bytes.Compare(key, value) != 0 {

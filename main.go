@@ -2,6 +2,8 @@ package main
 
 import "os"
 import "flag"
+import "time"
+import "runtime"
 import "net/http"
 import _ "net/http/pprof"
 
@@ -11,11 +13,13 @@ import "github.com/prataprc/golog"
 
 var options struct {
 	db       string
+	cpu      int
 	path     string
-	entries  int
+	load     int
 	writes   int
-	ops      int
+	reads    int
 	keylen   int
+	vallen   int
 	bogn     string
 	memstore string
 	period   int
@@ -24,18 +28,25 @@ var options struct {
 
 func optparse(args []string) {
 	f := flag.NewFlagSet("dbperf", flag.ExitOnError)
+	cpu := runtime.GOMAXPROCS(-1)
 
-	f.StringVar(&options.db, "db", "llrb", "pick db storage to torture test.")
+	f.StringVar(&options.db, "db", "llrb", "lmdb|llrb|mvcc|bubt|bogn store type")
+	f.IntVar(&options.cpu, "cpu", cpu, "lmdb|llrb|mvcc|bubt|bogn store type")
 	f.StringVar(&options.path, "path", "", "db path to open")
-	f.IntVar(&options.entries, "n", 1000000, "db path to open")
+	f.IntVar(&options.load, "load", 1000000, "number of entries to load initially")
 	f.IntVar(&options.writes, "writes", 10000000, "total number of writes")
-	f.IntVar(&options.ops, "ops", 10000000, "total number of operations")
-	f.IntVar(&options.keylen, "key", 32, "db path to open")
-	f.IntVar(&options.seed, "seed", 10, "seed value to generate randomness")
+	f.IntVar(&options.reads, "reads", 10000000, "total number of read operations")
+	f.IntVar(&options.keylen, "key", 32, "key size")
+	f.IntVar(&options.vallen, "value", 32, "value size")
+	f.IntVar(&options.seed, "seed", 0, "seed value to generate randomness")
 	f.StringVar(&options.bogn, "bogn", "inmem", "inmem|durable|dgm|workset")
-	f.StringVar(&options.memstore, "memstore", "mvcc", "llrb|mvcc")
-	f.IntVar(&options.period, "period", 10, "flush period in seconds")
+	f.StringVar(&options.memstore, "memstore", "mvcc", "llrb|mvcc for bogn")
+	f.IntVar(&options.period, "period", 10, "bogn flush period, in seconds")
 	f.Parse(args)
+
+	if options.seed == 0 {
+		options.seed = int(time.Now().UnixNano())
+	}
 }
 
 func main() {
