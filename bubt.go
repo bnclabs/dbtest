@@ -6,7 +6,6 @@ import "fmt"
 import "sync"
 import "time"
 import "bytes"
-import "runtime"
 import "strconv"
 import "sync/atomic"
 import "path/filepath"
@@ -14,8 +13,13 @@ import "math/rand"
 
 import "github.com/prataprc/gostore/api"
 import "github.com/prataprc/gostore/bubt"
+import "github.com/prataprc/gostore/llrb"
 
 func testbubt() error {
+	setts := llrb.Defaultsettings()
+	mindex := llrb.NewLLRB("dbtest", setts)
+	defer mindex.Destroy()
+
 	path, paths := os.TempDir(), []string{}
 	for i, base := range []string{"1", "2", "3"} {
 		paths = append(paths, filepath.Join(path, base))
@@ -34,7 +38,7 @@ func testbubt() error {
 
 	klen, vlen := int64(options.keylen), int64(options.vallen)
 	seed := int64(options.seed)
-	iter := makeiterator(klen, vlen, int64(options.load), delmod)
+	iter := makeiterator(klen, vlen, int64(options.load), delmod, mindex)
 	md := generatemeta(seed)
 
 	fmsg := "msize: %v zsize:%v mmap:%v mdsize:%v\n"
@@ -58,17 +62,96 @@ func testbubt() error {
 		panic(fmt.Errorf("expected %v, got %v", name, index.ID()))
 	}
 
+	fin := make(chan struct{})
+
+	var vwg sync.WaitGroup
+
+	vwg.Add(1)
+	go bubtvalidator(mindex, index, &vwg, fin)
+
 	var rwg sync.WaitGroup
-	for i := 0; i < runtime.GOMAXPROCS(-1); i++ {
+
+	for i := 0; i < options.cpu; i++ {
+		rwg.Add(2)
 		go bubtGetter(index, int64(options.load), seed, &rwg)
 		go bubtRanger(index, int64(options.load), seed, &rwg)
-		rwg.Add(2)
 	}
 	rwg.Wait()
+	close(fin)
+	vwg.Wait()
 
 	fmt.Printf("BUBT total indexed %v items\n", index.Count())
 
 	return nil
+}
+
+func bubtvalidator(
+	mindex *llrb.LLRB, index *bubt.Snapshot,
+	wg *sync.WaitGroup, fin chan struct{}) {
+
+	defer wg.Done()
+
+	n := uint64(0)
+	validate := func() {
+		n++
+		now := time.Now()
+
+		mview, view := mindex.View(n), index.View(n)
+
+		mcur, err := mview.OpenCursor(nil)
+		if err != nil {
+			panic(err)
+		}
+		cur, err := view.OpenCursor(nil)
+		if err != nil {
+			panic(err)
+		}
+
+		count := 0
+		mkey, mvalue, _, mdel, merr := mcur.YNext(false /*fin*/)
+		key, value, _, del, err := cur.YNext(false /*fin*/)
+		for mkey != nil && key != nil {
+			if err == io.EOF && merr == io.EOF {
+				break
+			} else if err != nil {
+				panic(err)
+			} else if merr != nil {
+				panic(merr)
+			} else if bytes.Compare(mkey, key) != 0 {
+				panic(fmt.Errorf("%s != %s", mkey, key))
+			} else if bytes.Compare(mvalue, value) != 0 {
+				panic(fmt.Errorf("for %s : %s != %s", key, mvalue, value))
+			} else if del != mdel {
+				panic(fmt.Errorf("for %s : %v != %v", key, mdel, del))
+			}
+			mkey, mvalue, _, mdel, merr = mcur.YNext(false /*fin*/)
+			key, value, _, del, err = cur.YNext(false /*fin*/)
+			count++
+		}
+
+		if mkey != nil {
+			panic(fmt.Errorf("mindex key remaining %s", mkey))
+		} else if key != nil {
+			panic(fmt.Errorf("index key remaining %s", key))
+		}
+
+		mview.Abort()
+		view.Abort()
+
+		fmt.Printf("Took %v to validate index\n", time.Since(now))
+	}
+
+	tick := time.NewTicker(10 * time.Second)
+	for {
+		<-tick.C
+		select {
+		case <-fin:
+			validate()
+			return
+		default:
+		}
+		validate()
+	}
 }
 
 var bubtgets = []func(x *bubt.Snapshot, k, v []byte) ([]byte, uint64, bool, bool){
@@ -231,7 +314,9 @@ func bubtRange2(index *bubt.Snapshot, key, value []byte) (n int64) {
 	return
 }
 
-func makeiterator(klen, vlen, entries, mod int64) api.Iterator {
+func makeiterator(
+	klen, vlen, entries, mod int64, mindex *llrb.LLRB) api.Iterator {
+
 	g := Generateloads(klen, vlen, entries)
 	key, value, seqno := make([]byte, 16), make([]byte, 16), uint64(0)
 
@@ -241,8 +326,10 @@ func makeiterator(klen, vlen, entries, mod int64) api.Iterator {
 			seqno++
 			x, _ := strconv.Atoi(Bytes2str(key))
 			deleted := false
+			mindex.Set(key, value, nil)
 			if (int64(x) % 2) == mod {
 				deleted = true
+				mindex.Delete(key, nil, true /*lsm*/)
 			}
 			//fmt.Printf("iterate %q %q %v %v\n", key, value, seqno, deleted)
 			return key, value, seqno, deleted, nil
