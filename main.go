@@ -64,6 +64,6 @@ func main() {
 	case "bubt":
 		testbubt()
 	case "bogn":
-		testbogn()
+		//testbogn()
 	}
 }

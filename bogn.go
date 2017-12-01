@@ -1,3 +1,5 @@
+// +build ignore
+
 package main
 
 import "io"
@@ -19,6 +21,7 @@ func testbogn() error {
 	setts := bognsettings(options.seed)
 	bogn.PurgeIndex("dbtest", setts)
 	fmt.Println(setts)
+
 	index, err := bogn.New("dbtest", setts)
 	if err != nil {
 		panic(err)
