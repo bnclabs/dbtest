@@ -6,6 +6,7 @@ import "sync"
 import "time"
 import "bytes"
 import "strconv"
+import "runtime"
 import "sync/atomic"
 import "io/ioutil"
 import "math/rand"
@@ -27,8 +28,8 @@ func testmvcc() error {
 	var wwg, rwg sync.WaitGroup
 	fin := make(chan struct{})
 
-	go mvccvalidator(index, true /*log*/, &rwg, fin)
-	rwg.Add(1)
+	//go mvccvalidator(index, true /*log*/, &rwg, fin)
+	//rwg.Add(1)
 
 	//// writer routines
 	n := atomic.LoadInt64(&numentries)
@@ -38,9 +39,9 @@ func testmvcc() error {
 	wwg.Add(3)
 	// reader routines
 	for i := 0; i < numcpus; i++ {
-		go mvccGetter(index, n, seedl, seedc, fin, &rwg)
-		go mvccRanger(index, n, seedl, seedc, fin, &rwg)
-		rwg.Add(2)
+		//go mvccGetter(index, n, seedl, seedc, fin, &rwg)
+		//go mvccRanger(index, n, seedl, seedc, fin, &rwg)
+		//rwg.Add(2)
 	}
 	wwg.Wait()
 	close(fin)
@@ -141,6 +142,7 @@ func mvccCreater(index *llrb.MVCC, n, seedc int64, wg *sync.WaitGroup) {
 			fmt.Printf(fmsg, markercount, x, nc, y.Round(time.Second), count)
 			now = time.Now()
 		}
+		runtime.Gosched()
 	}
 	rlbks := atomic.LoadInt64(&rollbacks)
 	fmsg := "at exit, mvccCreated %v items in %v, rollback %v\n"
@@ -197,11 +199,13 @@ func mvccUpdater(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 		atomic.AddInt64(&totalwrites, 1)
 		if nupdates = nupdates + 1; nupdates%markercount == 0 {
 			count := index.Count()
-			x, y := time.Since(now).Round(time.Second), time.Since(epoch)
+			x := time.Since(now).Round(time.Second)
+			y := time.Since(epoch).Round(time.Second)
 			fmsg := "mvccUpdated {%v items in %v} {%v items in %v} count:%v\n"
-			fmt.Printf(fmsg, markercount, x, nupdates, y.Round(time.Second), count)
+			fmt.Printf(fmsg, markercount, x, nupdates, y, count)
 			now = time.Now()
 		}
+		runtime.Gosched()
 	}
 	fmsg := "at exit, mvccUpdated %v items in %v\n"
 	fmt.Printf(fmsg, nupdates, time.Since(epoch))
@@ -349,12 +353,11 @@ func mvccDeleter(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
-	lsmmap := map[int]bool{0: true, 1: false}
+	lsm := options.lsm
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		key, value = g(key, value)
 		//fmt.Printf("delete %q\n", key)
-		ln := len(mvccdels)
-		delidx, lsm := rnd.Intn(1000000)%ln, lsmmap[rnd.Intn(1000000)%2]
+		delidx := rnd.Intn(1000000) % len(mvccdels)
 		if lsm {
 			delidx = delidx % 2
 		}
@@ -387,6 +390,7 @@ func mvccDeleter(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 			fmt.Printf(fmsg, markercount, x, ndeletes, xdeletes, y, count)
 			now = time.Now()
 		}
+		runtime.Gosched()
 	}
 	fmsg := "at exit, mvccDeleter %v:%v items in %v\n"
 	fmt.Printf(fmsg, ndeletes, xdeletes, time.Since(epoch))

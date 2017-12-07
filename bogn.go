@@ -1,5 +1,3 @@
-// +build ignore
-
 package main
 
 import "io"
@@ -7,20 +5,18 @@ import "fmt"
 import "sync"
 import "time"
 import "bytes"
-
-//import "runtime"
+import "runtime"
 import "strconv"
 import "sync/atomic"
 import "math/rand"
 
-import "github.com/prataprc/gostore/api"
+//import "github.com/prataprc/gostore/api" TODO
 import "github.com/prataprc/gostore/bogn"
 import s "github.com/prataprc/gosettings"
 
 func testbogn() error {
 	setts := bognsettings(options.seed)
 	bogn.PurgeIndex("dbtest", setts)
-	fmt.Println(setts)
 
 	index, err := bogn.New("dbtest", setts)
 	if err != nil {
@@ -28,6 +24,7 @@ func testbogn() error {
 	}
 	defer index.Destroy()
 	defer index.Close()
+	index.Start()
 
 	seedl, seedc := int64(options.seed), int64(options.seed)+100
 	fmt.Printf("Seed for load: %v, for ops: %v\n", seedl, seedc)
@@ -39,15 +36,16 @@ func testbogn() error {
 	fin := make(chan struct{})
 
 	//go bognvalidator(index, true /*log*/, &rwg, fin)
+	//rwg.Add(1)
 
 	// writer routines
 	n := atomic.LoadInt64(&numentries)
 	go bognCreater(index, n, seedc, &wwg)
-	//go bognUpdater(index, n, seedl, seedc, &wwg)
-	//go bognDeleter(index, n, seedl, seedc, &wwg)
-	wwg.Add(1)
+	go bognUpdater(index, n, seedl, seedc, &wwg)
+	go bognDeleter(index, n, seedl, seedc, &wwg)
+	wwg.Add(3)
 	//// reader routines
-	//for i := 0; i < runtime.GOMAXPROCS(-1); i++ {
+	//for i := 0; i < options.cpu; i++ {
 	//	go bognGetter(index, n, seedl, seedc, fin, &rwg)
 	//	go bognRanger(index, n, seedl, seedc, fin, &rwg)
 	//	rwg.Add(2)
@@ -139,6 +137,7 @@ func bognCreater(index *bogn.Bogn, n, seedc int64, wg *sync.WaitGroup) {
 			fmt.Printf(fmsg, markercount, x, nc, y.Round(time.Second))
 			now = time.Now()
 		}
+		runtime.Gosched()
 	}
 	fmsg := "at exit, bognCreated %v items in %v\n"
 	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), time.Since(epoch))
@@ -178,7 +177,7 @@ func bognUpdater(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		key, value = g(key, value)
-		setidx := rnd.Intn(1000000) % 4
+		setidx := rnd.Intn(1000000) % len(bognsets)
 		for i := 2; i >= 0; i-- {
 			refcas := bognsets[setidx](index, key, value, oldvalue)
 			oldvalue, cas, del, ok := index.Get(key, oldvalue)
@@ -194,6 +193,7 @@ func bognUpdater(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 			fmt.Printf(fmsg, markercount, x, nupdates, y.Round(time.Second))
 			now = time.Now()
 		}
+		runtime.Gosched()
 	}
 	fmsg := "at exit, bognUpdated %v items in %v\n"
 	fmt.Printf(fmsg, nupdates, time.Since(epoch))
@@ -280,7 +280,6 @@ func vbogndel(
 	i int, lsm, ok bool) string {
 
 	var err error
-	var cur api.Cursor
 	if lsm == false {
 		if ok == true {
 			err = fmt.Errorf("unexpected true when lsm is false")
@@ -289,27 +288,27 @@ func vbogndel(
 		}
 
 	} else {
-		var view api.Transactor
-		switch idx := index.(type) {
-		case *bogn.Bogn:
-			view = idx.View(0x1234)
-		}
+		//var view api.Transactor
+		//switch idx := index.(type) {
+		//case *bogn.Bogn:
+		//	view = idx.View(0x1234)
+		//}
 
-		cur, err = view.OpenCursor(key)
-		if err == nil {
-			_, oldvalue, cas, del, err := cur.YNext(false)
+		//cur, err := view.OpenCursor(key)
+		//if err == nil {
+		//	_, oldvalue, cas, del, err := cur.YNext(false)
 
-			if err != nil {
-			} else if del == false {
-				err = fmt.Errorf("expected delete")
-			} else if refcas > 0 && cas != refcas {
-				err = fmt.Errorf("expected %v, got %v", refcas, cas)
-			}
-			if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-				err = fmt.Errorf("expected %q, got %q", key, oldvalue)
-			}
-		}
-		view.Abort()
+		//	if err != nil {
+		//	} else if del == false {
+		//		err = fmt.Errorf("expected delete")
+		//	} else if refcas > 0 && cas != refcas {
+		//		err = fmt.Errorf("expected %v, got %v", refcas, cas)
+		//	}
+		//	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
+		//		err = fmt.Errorf("expected %q, got %q", key, oldvalue)
+		//	}
+		//}
+		//view.Abort()
 	}
 
 	if err != nil && i == 0 {
@@ -331,12 +330,11 @@ func bognDeleter(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
-	lsmmap := map[int]bool{0: true, 1: false}
+	lsm := options.lsm
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		key, value = g(key, value)
 		//fmt.Printf("delete %q\n", key)
-		ln := len(bogndels)
-		delidx, lsm := rnd.Intn(1000000)%ln, lsmmap[rnd.Intn(1000000)%2]
+		delidx := rnd.Intn(1000000) % len(bogndels)
 		if lsm {
 			delidx = delidx % 2
 		}
@@ -344,12 +342,18 @@ func bognDeleter(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 			refcas, ok1 := bogndels[delidx](index, key, value, lsm)
 			oldvalue, _, _, ok2 := index.Get(key, oldvalue)
 			if vbogndel(index, key, oldvalue, refcas, i, lsm, ok2) == "ok" {
-				if ok1 || lsm == true {
-					ndeletes++
-					atomic.AddInt64(&numentries, -1)
-					atomic.AddInt64(&totalwrites, 1)
-				} else {
+				if ok1 == false && lsm == false {
 					xdeletes++
+				} else if ok1 == false && lsm == true {
+					ndeletes++
+					atomic.AddInt64(&totalwrites, 1)
+				} else if ok1 == true && lsm == false {
+					ndeletes++
+					atomic.AddInt64(&totalwrites, 1)
+					atomic.AddInt64(&numentries, -1)
+				} else if ok1 == true && lsm == true {
+					ndeletes++
+					atomic.AddInt64(&totalwrites, 1)
 				}
 				break
 			}
@@ -362,6 +366,7 @@ func bognDeleter(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 			fmt.Printf(fmsg, markercount, x, ndeletes, xdeletes, y)
 			now = time.Now()
 		}
+		runtime.Gosched()
 	}
 	fmsg := "at exit, bognDeleter %v:%v items in %v\n"
 	fmt.Printf(fmsg, ndeletes, xdeletes, time.Since(epoch))
@@ -502,7 +507,7 @@ func bognGet2(
 
 	//fmt.Printf("bognGet2\n")
 	txn := index.BeginTxn(0xC0FFEE)
-	value, del, ok := txn.Get(key, value)
+	value, _, del, ok := txn.Get(key, value)
 	if ok == true {
 		cur, err := txn.OpenCursor(key)
 		if err != nil {
@@ -525,7 +530,7 @@ func bognGet3(
 	index *bogn.Bogn, key, value []byte) ([]byte, uint64, bool, bool) {
 
 	view := index.View(0x1235)
-	value, del, ok := view.Get(key, value)
+	value, _, del, ok := view.Get(key, value)
 	if ok == true {
 		cur, err := view.OpenCursor(key)
 		if err != nil {
@@ -711,5 +716,16 @@ func bognsettings(seed int) s.Settings {
 		setts["dgm"] = true
 		setts["workingset"] = true
 	}
+
+	a, b, c := setts["durable"], setts["dgm"], setts["workingset"]
+	fmt.Printf("durable:%v dgm:%v workingset:%v\n", a, b, c)
+	a, b = setts["ratio"], setts["period"]
+	fmt.Printf("ratio:%v period:%v lsm:%v\n", a, b, options.lsm)
+	a = setts["llrb.snapshottick"]
+	fmt.Printf("llrb snapshottick:%v\n", a)
+	a, b = setts["bubt.diskpaths"], setts["bubt.msize"]
+	c, d := setts["bubt.zsize"], setts["bubt.mmap"]
+	fmt.Printf("bubt diskpaths:%v msize:%v zsize:%v mmap:%v\n", a, b, c, d)
+
 	return setts
 }

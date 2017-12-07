@@ -22,6 +22,7 @@ var options struct {
 	bogn     string
 	memstore string
 	period   int
+	lsm      bool
 	seed     int
 }
 
@@ -40,6 +41,7 @@ func optparse(args []string) {
 	f.StringVar(&options.bogn, "bogn", "inmem", "inmem|durable|dgm|workset")
 	f.StringVar(&options.memstore, "memstore", "mvcc", "llrb|mvcc for bogn")
 	f.IntVar(&options.period, "period", 10, "bogn flush period, in seconds")
+	f.BoolVar(&options.lsm, "lsm", false, "use LSM deletes")
 	f.Parse(args)
 
 	if options.seed == 0 {
@@ -64,6 +66,6 @@ func main() {
 	case "bubt":
 		testbubt()
 	case "bogn":
-		//testbogn()
+		testbogn()
 	}
 }

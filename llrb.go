@@ -37,7 +37,7 @@ func testllrb() error {
 	go llrbDeleter(index, n, seedl, seedc, &wwg)
 	wwg.Add(3)
 	// reader routines
-	for i := 0; i < runtime.GOMAXPROCS(-1); i++ {
+	for i := 0; i < options.cpu; i++ {
 		go llrbGetter(index, n, seedl, seedc, fin, &rwg)
 		go llrbRanger(index, n, seedl, seedc, fin, &rwg)
 		rwg.Add(2)
@@ -134,6 +134,7 @@ func llrbCreater(index *llrb.LLRB, n, seedc int64, wg *sync.WaitGroup) {
 			fmt.Printf(fmsg, markercount, x, nc, y.Round(time.Second), count)
 			now = time.Now()
 		}
+		runtime.Gosched()
 	}
 	fmsg := "at exit, llrbCreated %v items in %v\n"
 	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), time.Since(epoch))
@@ -194,6 +195,7 @@ func llrbUpdater(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 			fmt.Printf(fmsg, markercount, x, nupdates, y, count)
 			now = time.Now()
 		}
+		runtime.Gosched()
 	}
 	fmsg := "at exit, llrbUpdated %v items in %v\n"
 	fmt.Printf(fmsg, nupdates, time.Since(epoch))
@@ -371,6 +373,7 @@ func llrbDeleter(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 			fmt.Printf(fmsg, markercount, x, ndeletes, xdeletes, y, count)
 			now = time.Now()
 		}
+		runtime.Gosched()
 	}
 	fmsg := "at exit, llrbDeleter %v:%v items in %v\n"
 	fmt.Printf(fmsg, ndeletes, xdeletes, time.Since(epoch))
