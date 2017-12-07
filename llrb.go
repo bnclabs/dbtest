@@ -30,7 +30,7 @@ func testllrb() error {
 	go llrbvalidator(index, true /*log*/, &rwg, fin)
 	rwg.Add(1)
 
-	//// writer routines
+	// writer routines
 	n := atomic.LoadInt64(&numentries)
 	go llrbCreater(index, n, seedc, &wwg)
 	go llrbUpdater(index, n, seedl, seedc, &wwg)

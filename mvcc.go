@@ -28,10 +28,10 @@ func testmvcc() error {
 	var wwg, rwg sync.WaitGroup
 	fin := make(chan struct{})
 
-	//go mvccvalidator(index, true /*log*/, &rwg, fin)
-	//rwg.Add(1)
+	go mvccvalidator(index, true /*log*/, &rwg, fin)
+	rwg.Add(1)
 
-	//// writer routines
+	// writer routines
 	n := atomic.LoadInt64(&numentries)
 	go mvccCreater(index, n, seedc, &wwg)
 	go mvccUpdater(index, n, seedl, seedc, &wwg)
@@ -39,9 +39,9 @@ func testmvcc() error {
 	wwg.Add(3)
 	// reader routines
 	for i := 0; i < numcpus; i++ {
-		//go mvccGetter(index, n, seedl, seedc, fin, &rwg)
-		//go mvccRanger(index, n, seedl, seedc, fin, &rwg)
-		//rwg.Add(2)
+		go mvccGetter(index, n, seedl, seedc, fin, &rwg)
+		go mvccRanger(index, n, seedl, seedc, fin, &rwg)
+		rwg.Add(2)
 	}
 	wwg.Wait()
 	close(fin)

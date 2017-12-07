@@ -288,6 +288,7 @@ func vbogndel(
 		}
 
 	} else {
+		// TODO: uncomment these lines for transaction test cases.
 		//var view api.Transactor
 		//switch idx := index.(type) {
 		//case *bogn.Bogn:
