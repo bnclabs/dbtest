@@ -144,9 +144,8 @@ func mvccCreater(index *llrb.MVCC, n, seedc int64, wg *sync.WaitGroup) {
 		}
 		runtime.Gosched()
 	}
-	rlbks := atomic.LoadInt64(&rollbacks)
-	fmsg := "at exit, mvccCreated %v items in %v, rollback %v\n"
-	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), time.Since(epoch), rlbks)
+	fmsg := "at exit, mvccCreated %v items in %v"
+	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), time.Since(epoch))
 }
 
 func vmvccupdater(
