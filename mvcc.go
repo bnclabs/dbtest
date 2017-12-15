@@ -280,7 +280,7 @@ func mvccSet4(index *llrb.MVCC, key, value, oldvalue []byte) (uint64, []byte) {
 			panic(err)
 		}
 		oldvalue = cur.Set(key, value, oldvalue)
-		//fmt.Printf("update4 %q %q %q \n", key, value, oldvalue)
+		//fmt.Printf("update4 %q %q %q\n", key, value, oldvalue)
 		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
 		}
@@ -317,7 +317,7 @@ func vmvccdel(
 		}
 
 		cur, err = view.OpenCursor(key)
-		if err == err {
+		if err == nil {
 			_, oldvalue, cas, del, err := cur.YNext(false)
 			if err != nil {
 			} else if del == false {
