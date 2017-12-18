@@ -10,7 +10,7 @@ import "strconv"
 import "sync/atomic"
 import "math/rand"
 
-//import "github.com/prataprc/gostore/api" TODO
+import "github.com/prataprc/gostore/api"
 import "github.com/prataprc/gostore/bogn"
 import s "github.com/prataprc/gosettings"
 
@@ -32,7 +32,7 @@ func testbogn() error {
 		return err
 	}
 
-	var wwg sync.WaitGroup
+	var wwg, rwg sync.WaitGroup
 	fin := make(chan struct{})
 
 	//go bognvalidator(index, true /*log*/, &rwg, fin)
@@ -44,17 +44,24 @@ func testbogn() error {
 	go bognUpdater(index, n, seedl, seedc, &wwg)
 	go bognDeleter(index, n, seedl, seedc, &wwg)
 	wwg.Add(3)
-	//// reader routines
-	//for i := 0; i < options.cpu; i++ {
-	//	go bognGetter(index, n, seedl, seedc, fin, &rwg)
-	//	go bognRanger(index, n, seedl, seedc, fin, &rwg)
-	//	rwg.Add(2)
-	//}
+	// reader routines
+	for i := 0; i < options.cpu; i++ {
+		go bognGetter(index, n, seedl, seedc, fin, &rwg)
+		go bognRanger(index, n, seedl, seedc, fin, &rwg)
+		rwg.Add(2)
+	}
 	wwg.Wait()
 	close(fin)
-	//rwg.Wait()
+	rwg.Wait()
 
 	index.Log()
+	index.Validate()
+
+	fmt.Printf("Number of ROLLBACKS: %v\n", rollbacks)
+	fmt.Printf("Number of conflicts: %v\n", conflicts)
+	//count, n := index.Count(), atomic.LoadInt64(&numentries)
+	//fmt.Printf("BOGN total indexed %v items, expected %v\n", count, n)
+
 	return nil
 }
 
@@ -101,8 +108,8 @@ func bognLoad(index *bogn.Bogn, seedl int64) error {
 	return nil
 }
 
-var bognsets = []func(index *bogn.Bogn, key, val, oldval []byte) uint64{
-	bognSet1, bognSet2, // bognSet3, bognSet4,
+var bognsets = []func(index *bogn.Bogn, key, val, ov []byte) (uint64, []byte){
+	bognSet1, bognSet2, bognSet3, bognSet4,
 }
 
 func bognCreater(index *bogn.Bogn, n, seedc int64, wg *sync.WaitGroup) {
@@ -117,7 +124,7 @@ func bognCreater(index *bogn.Bogn, n, seedc int64, wg *sync.WaitGroup) {
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		key, value = g(key, value)
 		setidx := rnd.Intn(1000000) % len(bognsets)
-		refcas := bognsets[setidx](index, key, value, oldvalue)
+		refcas, _ := bognsets[setidx](index, key, value, oldvalue)
 		oldvalue, cas, del, ok := index.Get(key, oldvalue)
 		if ok == false {
 			panic("unexpected false")
@@ -179,7 +186,7 @@ func bognUpdater(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 		key, value = g(key, value)
 		setidx := rnd.Intn(1000000) % len(bognsets)
 		for i := 2; i >= 0; i-- {
-			refcas := bognsets[setidx](index, key, value, oldvalue)
+			refcas, _ := bognsets[setidx](index, key, value, oldvalue)
 			oldvalue, cas, del, ok := index.Get(key, oldvalue)
 			if vbognupdater(key, oldvalue, refcas, cas, i, del, ok) == "ok" {
 				break
@@ -199,13 +206,13 @@ func bognUpdater(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	fmt.Printf(fmsg, nupdates, time.Since(epoch))
 }
 
-func bognSet1(index *bogn.Bogn, key, value, oldvalue []byte) uint64 {
+func bognSet1(index *bogn.Bogn, key, value, oldvalue []byte) (uint64, []byte) {
 	oldvalue, cas := index.Set(key, value, oldvalue)
 	//fmt.Printf("update1 %q %q %q \n", key, value, oldvalue)
 	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
 		panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
 	}
-	return cas
+	return cas, oldvalue
 }
 
 func bognverifyset2(err error, i int, key, oldvalue []byte) string {
@@ -222,7 +229,7 @@ func bognverifyset2(err error, i int, key, oldvalue []byte) string {
 	return "ok"
 }
 
-func bognSet2(index *bogn.Bogn, key, value, oldvalue []byte) uint64 {
+func bognSet2(index *bogn.Bogn, key, value, oldvalue []byte) (uint64, []byte) {
 	for i := 2; i >= 0; i-- {
 		oldvalue, oldcas, deleted, ok := index.Get(key, oldvalue)
 		if deleted || ok == false {
@@ -235,44 +242,60 @@ func bognSet2(index *bogn.Bogn, key, value, oldvalue []byte) uint64 {
 		oldvalue, cas, err := index.SetCAS(key, value, oldvalue, oldcas)
 		//fmt.Printf("update2 %q %q %q \n", key, value, oldvalue)
 		if bognverifyset2(err, i, key, oldvalue) == "ok" {
-			return cas
+			return cas, oldvalue
 		}
 	}
 	panic("unreachable code")
 }
 
-func bognSet3(index *bogn.Bogn, key, value, oldvalue []byte) uint64 {
-	txn := index.BeginTxn(0xC0FFEE)
-	oldvalue = txn.Set(key, value, oldvalue)
-	//fmt.Printf("update3 %q %q %q \n", key, value, oldvalue)
-	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+func bognSet3(index *bogn.Bogn, key, value, oldvalue []byte) (uint64, []byte) {
+	for i := numcpus * 2; i >= 0; i-- {
+		txn := index.BeginTxn(0xC0FFEE)
+		oldvalue = txn.Set(key, value, oldvalue)
+		//fmt.Printf("update3 %q %q %q \n", key, value, oldvalue)
+		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+		}
+		err := txn.Commit()
+		if err == nil {
+			return 0, oldvalue
+		} else if i == 0 {
+			panic(err)
+		} else if err.Error() == api.ErrorRollback.Error() {
+			atomic.AddInt64(&rollbacks, 1)
+		}
+		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
 	}
-	if err := txn.Commit(); err != nil {
-		panic(err)
-	}
-	return 0
+	return 0, oldvalue
 }
 
-func bognSet4(index *bogn.Bogn, key, value, oldvalue []byte) uint64 {
-	txn := index.BeginTxn(0xC0FFEE)
-	cur, err := txn.OpenCursor(key)
-	if err != nil {
-		panic(err)
+func bognSet4(index *bogn.Bogn, key, value, oldvalue []byte) (uint64, []byte) {
+	for i := numcpus * 2; i >= 0; i-- {
+		txn := index.BeginTxn(0xC0FFEE)
+		cur, err := txn.OpenCursor(key)
+		if err != nil {
+			panic(err)
+		}
+		oldvalue = cur.Set(key, value, oldvalue)
+		//fmt.Printf("update4 %q %q %q \n", key, value, oldvalue)
+		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+		}
+		err = txn.Commit()
+		if err == nil {
+			return 0, oldvalue
+		} else if i == 0 {
+			panic(err)
+		} else if err.Error() == api.ErrorRollback.Error() {
+			atomic.AddInt64(&rollbacks, 1)
+		}
+		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
 	}
-	oldvalue = cur.Set(key, value, oldvalue)
-	//fmt.Printf("update4 %q %q %q \n", key, value, oldvalue)
-	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
-	}
-	if err := txn.Commit(); err != nil {
-		panic(err)
-	}
-	return 0
+	return 0, oldvalue
 }
 
 var bogndels = []func(*bogn.Bogn, []byte, []byte, bool) (uint64, bool){
-	bognDel1, // bognDel2, bognDel3, bognDel4,
+	bognDel1, bognDel2, bognDel3, bognDel4,
 }
 
 func vbogndel(
@@ -288,28 +311,27 @@ func vbogndel(
 		}
 
 	} else {
-		// TODO: uncomment these lines for transaction test cases.
-		//var view api.Transactor
-		//switch idx := index.(type) {
-		//case *bogn.Bogn:
-		//	view = idx.View(0x1234)
-		//}
+		var view api.Transactor
+		switch idx := index.(type) {
+		case *bogn.Bogn:
+			view = idx.View(0x1234)
+		}
 
-		//cur, err := view.OpenCursor(key)
-		//if err == nil {
-		//	_, oldvalue, cas, del, err := cur.YNext(false)
+		cur, err := view.OpenCursor(key)
+		if err == nil {
+			_, oldvalue, cas, del, err := cur.YNext(false)
 
-		//	if err != nil {
-		//	} else if del == false {
-		//		err = fmt.Errorf("expected delete")
-		//	} else if refcas > 0 && cas != refcas {
-		//		err = fmt.Errorf("expected %v, got %v", refcas, cas)
-		//	}
-		//	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		//		err = fmt.Errorf("expected %q, got %q", key, oldvalue)
-		//	}
-		//}
-		//view.Abort()
+			if err != nil {
+			} else if del == false {
+				err = fmt.Errorf("expected delete")
+			} else if refcas > 0 && cas != refcas {
+				err = fmt.Errorf("expected %v, got %v", refcas, cas)
+			}
+			if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
+				err = fmt.Errorf("expected %q, got %q", key, oldvalue)
+			}
+		}
+		view.Abort()
 	}
 
 	if err != nil && i == 0 {
@@ -388,15 +410,23 @@ func bognDel1(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
 func bognDel2(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
-	txn := index.BeginTxn(0xC0FFEE)
-	oldvalue = txn.Delete(key, oldvalue, lsm)
-	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
-	} else if len(oldvalue) > 0 {
-		ok = true
-	}
-	if err := txn.Commit(); err != nil {
-		panic(err)
+	for i := numcpus * 2; i >= 0; i-- {
+		txn := index.BeginTxn(0xC0FFEE)
+		oldvalue = txn.Delete(key, oldvalue, lsm)
+		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+		} else if len(oldvalue) > 0 {
+			ok = true
+		}
+		err := txn.Commit()
+		if err == nil {
+			return 0, ok
+		} else if i == 0 {
+			panic(err)
+		} else if err.Error() == api.ErrorRollback.Error() {
+			atomic.AddInt64(&rollbacks, 1)
+		}
+		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
 	}
 	return 0, ok
 }
@@ -404,19 +434,27 @@ func bognDel2(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
 func bognDel3(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
-	txn := index.BeginTxn(0xC0FFEE)
-	cur, err := txn.OpenCursor(key)
-	if err != nil {
-		panic(err)
-	}
-	oldvalue = cur.Delete(key, oldvalue, lsm)
-	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
-	} else if len(oldvalue) > 0 {
-		ok = true
-	}
-	if err := txn.Commit(); err != nil {
-		panic(err)
+	for i := numcpus * 2; i >= 0; i-- {
+		txn := index.BeginTxn(0xC0FFEE)
+		cur, err := txn.OpenCursor(key)
+		if err != nil {
+			panic(err)
+		}
+		oldvalue = cur.Delete(key, oldvalue, lsm)
+		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+		} else if len(oldvalue) > 0 {
+			ok = true
+		}
+		err = txn.Commit()
+		if err == nil {
+			return 0, ok
+		} else if i == 0 {
+			panic(err)
+		} else if err.Error() == api.ErrorRollback.Error() {
+			atomic.AddInt64(&rollbacks, 1)
+		}
+		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
 	}
 	return 0, ok
 }
@@ -424,24 +462,32 @@ func bognDel3(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
 func bognDel4(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
-	txn := index.BeginTxn(0xC0FFEE)
-	cur, err := txn.OpenCursor(key)
-	if err != nil {
-		panic(err)
-	}
-	curkey, _ := cur.Key()
-	if bytes.Compare(key, curkey) == 0 {
-		cur.Delcursor(lsm)
-		ok = true
-	}
-	if err := txn.Commit(); err != nil {
-		panic(err)
+	for i := numcpus * 2; i >= 0; i-- {
+		txn := index.BeginTxn(0xC0FFEE)
+		cur, err := txn.OpenCursor(key)
+		if err != nil {
+			panic(err)
+		}
+		curkey, _ := cur.Key()
+		if bytes.Compare(key, curkey) == 0 {
+			cur.Delcursor(lsm)
+			ok = true
+		}
+		err = txn.Commit()
+		if err == nil {
+			return 0, ok
+		} else if i == 0 {
+			panic(err)
+		} else if err.Error() == api.ErrorRollback.Error() {
+			atomic.AddInt64(&rollbacks, 1)
+		}
+		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
 	}
 	return 0, ok
 }
 
 var bogngets = []func(x *bogn.Bogn, k, v []byte) ([]byte, uint64, bool, bool){
-	bognGet1, // bognGet2, bognGet3,
+	bognGet1, bognGet2, bognGet3,
 }
 
 func bognGetter(
@@ -461,7 +507,6 @@ func bognGetter(
 loop:
 	for {
 		ngets++
-		time.Sleep(10 * time.Microsecond)
 		key = g(key, atomic.LoadInt64(&ncreates))
 		ln := len(bogngets)
 		value, _, del, _ = bogngets[rnd.Intn(1000000)%ln](index, key, value)
@@ -488,6 +533,7 @@ loop:
 			fmsg := "bognGetter {%v items in %v} {%v:%v items in %v}\n"
 			fmt.Printf(fmsg, markercount, x, ngets, nmisses, y)
 		}
+		runtime.Gosched()
 	}
 	duration := time.Since(epoch)
 	<-fin
@@ -567,7 +613,6 @@ func bognRanger(
 	epoch, value := time.Now(), make([]byte, 16)
 loop:
 	for {
-		time.Sleep(10 * time.Microsecond)
 		key = g(key, atomic.LoadInt64(&ncreates))
 		ln := len(bognrngs)
 		n := bognrngs[rnd.Intn(1000000)%ln](index, key, value)
@@ -577,6 +622,7 @@ loop:
 			break loop
 		default:
 		}
+		runtime.Gosched()
 	}
 	duration := time.Since(epoch)
 	<-fin

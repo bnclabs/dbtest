@@ -8,7 +8,6 @@ import "bytes"
 import "strconv"
 import "runtime"
 import "sync/atomic"
-import "io/ioutil"
 import "math/rand"
 
 import "github.com/prataprc/gostore/llrb"
@@ -109,7 +108,6 @@ var mvccsets = []func(index *llrb.MVCC, k, v, ov []byte) (uint64, []byte){
 }
 
 func mvccCreater(index *llrb.MVCC, n, seedc int64, wg *sync.WaitGroup) {
-	time.Sleep(100 * time.Millisecond)
 	defer wg.Done()
 
 	klen, vlen := int64(options.keylen), int64(options.vallen)
@@ -171,7 +169,6 @@ func vmvccupdater(
 }
 
 func mvccUpdater(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
-	time.Sleep(400 * time.Millisecond)
 	defer wg.Done()
 
 	var nupdates int64
@@ -342,7 +339,6 @@ func vmvccdel(
 }
 
 func mvccDeleter(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
-	time.Sleep(800 * time.Millisecond)
 	defer wg.Done()
 
 	var ndeletes, xdeletes int64
@@ -385,7 +381,7 @@ func mvccDeleter(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 			count := index.Count()
 			x := time.Since(now).Round(time.Second)
 			y := time.Since(epoch).Round(time.Second)
-			fmsg := "mvccDeleted {%v items in %v} {%v:%v items in %v} count:%v\n"
+			fmsg := "mvccDeleted {%v items in %v} {%v:%v items in %v} cnt:%v\n"
 			fmt.Printf(fmsg, markercount, x, ndeletes, xdeletes, y, count)
 			now = time.Now()
 		}
@@ -587,10 +583,6 @@ func mvccGet3(
 		}
 		ykey, yvalue, _, ydel, _ := cur.YNext(false /*fin*/)
 		if bytes.Compare(key, ykey) != 0 {
-			fmt.Printf("count %v\n", index.Count())
-			buf := bytes.NewBuffer(nil)
-			index.Dotdump(buf)
-			ioutil.WriteFile("debug.dot", buf.Bytes(), 0666)
 			panic(fmt.Errorf("expected %q, got %q", key, ykey))
 		} else if del == false && ydel == false {
 			if bytes.Compare(value, yvalue) != 0 {
@@ -625,7 +617,6 @@ func mvccRanger(
 	epoch, value := time.Now(), make([]byte, 16)
 loop:
 	for {
-		time.Sleep(10 * time.Microsecond)
 		key = g(key, atomic.LoadInt64(&ncreates))
 		ln := len(mvccrngs)
 		n := mvccrngs[rnd.Intn(1000000)%ln](index, key, value)
@@ -635,6 +626,7 @@ loop:
 			break loop
 		default:
 		}
+		runtime.Gosched()
 	}
 	duration := time.Since(epoch)
 	<-fin
