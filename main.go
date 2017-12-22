@@ -38,7 +38,7 @@ func optparse(args []string) {
 	f.IntVar(&options.keylen, "key", 32, "key size")
 	f.IntVar(&options.vallen, "value", 32, "value size")
 	f.IntVar(&options.seed, "seed", 0, "seed value to generate randomness")
-	f.StringVar(&options.bogn, "bogn", "inmem", "inmem|durable|dgm|workset")
+	f.StringVar(&options.bogn, "bogn", "memonly", "memonly|durable|dgm|workset")
 	f.StringVar(&options.memstore, "memstore", "mvcc", "llrb|mvcc for bogn")
 	f.IntVar(&options.period, "period", 10, "bogn flush period, in seconds")
 	f.BoolVar(&options.lsm, "lsm", false, "use LSM deletes")

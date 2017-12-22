@@ -35,8 +35,8 @@ func testbogn() error {
 	var wwg, rwg sync.WaitGroup
 	fin := make(chan struct{})
 
-	//go bognvalidator(index, true /*log*/, &rwg, fin)
-	//rwg.Add(1)
+	go bognvalidator(index, true /*log*/, &rwg, fin)
+	rwg.Add(1)
 
 	// writer routines
 	n := atomic.LoadInt64(&numentries)
@@ -44,8 +44,9 @@ func testbogn() error {
 	go bognUpdater(index, n, seedl, seedc, &wwg)
 	go bognDeleter(index, n, seedl, seedc, &wwg)
 	wwg.Add(3)
+
 	// reader routines
-	for i := 0; i < options.cpu; i++ {
+	for i := 0; i < 4; i++ { // options.cpu; i++ {
 		go bognGetter(index, n, seedl, seedc, fin, &rwg)
 		go bognRanger(index, n, seedl, seedc, fin, &rwg)
 		rwg.Add(2)
@@ -71,11 +72,13 @@ func bognvalidator(
 	defer wg.Done()
 
 	tick := time.NewTicker(10 * time.Second)
+loop:
 	for {
 		<-tick.C
 		select {
 		case <-fin:
 		default:
+			break loop
 		}
 
 		if log {
@@ -746,7 +749,7 @@ func bognsettings(seed int) s.Settings {
 	setts["llrb.allocator"] = "flist"
 	setts["llrb.snapshottick"] = []int64{4, 8, 16, 32}[rnd.Intn(10000)%4]
 	switch options.bogn {
-	case "inmem":
+	case "memonly":
 		setts["durable"] = false
 		setts["dgm"] = false
 		setts["workingset"] = false
