@@ -2,6 +2,7 @@ package main
 
 import "runtime"
 
+var seqno uint64
 var ncreates int64
 var numentries int64
 var totalwrites int64

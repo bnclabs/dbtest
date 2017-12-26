@@ -87,14 +87,16 @@ func mvccLoad(index *llrb.MVCC, seedl int64) error {
 	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
 
-	key, value := make([]byte, 16), make([]byte, 16)
 	now, oldvalue := time.Now(), make([]byte, 16)
-	for key, value = g(key, value); key != nil; key, value = g(key, value) {
+	opaque := atomic.AddUint64(&seqno, 1)
+	key, value := g(make([]byte, 16), make([]byte, 16), opaque)
+	for ; key != nil; key, value = g(key, value, opaque) {
 		//fmt.Printf("load %q\n", key)
 		oldvalue, _ := index.Set(key, value, oldvalue)
 		if len(oldvalue) > 0 {
 			panic(fmt.Errorf("unexpected %q", oldvalue))
 		}
+		opaque = atomic.AddUint64(&seqno, 1)
 	}
 	atomic.AddInt64(&numentries, int64(options.load))
 	atomic.AddInt64(&totalwrites, int64(options.load))
@@ -117,7 +119,8 @@ func mvccCreater(index *llrb.MVCC, n, seedc int64, wg *sync.WaitGroup) {
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
-		key, value = g(key, value)
+		opaque := atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 		setidx := rnd.Intn(1000000) % len(mvccsets)
 		refcas, _ := mvccsets[setidx](index, key, value, oldvalue)
 		oldvalue, cas, del, ok := index.Get(key, oldvalue)
@@ -127,9 +130,8 @@ func mvccCreater(index *llrb.MVCC, n, seedc int64, wg *sync.WaitGroup) {
 			panic("unexpected delete")
 		} else if refcas > 0 && cas != refcas {
 			panic(fmt.Errorf("expected %v, got %v", refcas, cas))
-		} else if bytes.Compare(key, oldvalue) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
 		}
+		comparekeyvalue(key, oldvalue, options.vallen)
 
 		atomic.AddInt64(&numentries, 1)
 		atomic.AddInt64(&totalwrites, 1)
@@ -156,9 +158,8 @@ func vmvccupdater(
 		err = fmt.Errorf("unexpected delete")
 	} else if refcas > 0 && cas != refcas {
 		err = fmt.Errorf("expected %v, got %v", refcas, cas)
-	} else if bytes.Compare(key, oldvalue) != 0 {
-		err = fmt.Errorf("expected %q, got %q", key, oldvalue)
 	}
+	comparekeyvalue(key, oldvalue, options.vallen)
 	if err != nil && i == 0 {
 		panic(err)
 	} else if err != nil {
@@ -179,7 +180,8 @@ func mvccUpdater(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
-		key, value = g(key, value)
+		opaque := atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 		setidx := rnd.Intn(1000000) % len(mvccsets)
 		for i := 2; i >= 0; i-- {
 			refcas, oldvalue := mvccsets[setidx](index, key, value, oldvalue)
@@ -210,15 +212,15 @@ func mvccUpdater(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 func mvccSet1(index *llrb.MVCC, key, value, oldvalue []byte) (uint64, []byte) {
 	oldvalue, cas := index.Set(key, value, oldvalue)
 	//fmt.Printf("update1 %q %q %q \n", key, value, oldvalue)
-	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+	if len(oldvalue) > 0 {
+		comparekeyvalue(key, oldvalue, options.vallen)
 	}
 	return cas, oldvalue
 }
 
 func mvccverifyset2(err error, i int, key, oldvalue []byte) string {
-	if err == nil && len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+	if err == nil && len(oldvalue) > 0 {
+		comparekeyvalue(key, oldvalue, options.vallen)
 	}
 	if err != nil && i == 0 {
 		panic(err)
@@ -236,9 +238,8 @@ func mvccSet2(index *llrb.MVCC, key, value, oldvalue []byte) (uint64, []byte) {
 			oldcas = 0
 		} else if oldcas == 0 {
 			panic(fmt.Errorf("unexpected %v", oldcas))
-		} else if bytes.Compare(key, oldvalue) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
 		}
+		comparekeyvalue(key, oldvalue, options.vallen)
 		oldvalue, cas, err := index.SetCAS(key, value, oldvalue, oldcas)
 		//fmt.Printf("mvccSet2 %q %q %v %v\n", key, value, oldcas, err)
 		if mvccverifyset2(err, i, key, oldvalue) == "ok" {
@@ -253,8 +254,8 @@ func mvccSet3(index *llrb.MVCC, key, value, oldvalue []byte) (uint64, []byte) {
 		txn := index.BeginTxn(0xC0FFEE)
 		oldvalue = txn.Set(key, value, oldvalue)
 		//fmt.Printf("update3 %q %q %q \n", key, value, oldvalue)
-		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+		if len(oldvalue) > 0 {
+			comparekeyvalue(key, oldvalue, options.vallen)
 		}
 		err := txn.Commit()
 		if err == nil {
@@ -278,8 +279,8 @@ func mvccSet4(index *llrb.MVCC, key, value, oldvalue []byte) (uint64, []byte) {
 		}
 		oldvalue = cur.Set(key, value, oldvalue)
 		//fmt.Printf("update4 %q %q %q\n", key, value, oldvalue)
-		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+		if len(oldvalue) > 0 {
+			comparekeyvalue(key, oldvalue, options.vallen)
 		}
 		err = txn.Commit()
 		if err == nil {
@@ -303,7 +304,6 @@ func vmvccdel(
 	i int, lsm, ok bool) string {
 
 	var err error
-	var cur api.Cursor
 	if lsm {
 		var view api.Transactor
 		switch idx := index.(type) {
@@ -313,7 +313,7 @@ func vmvccdel(
 			view = idx.View(0x1234)
 		}
 
-		cur, err = view.OpenCursor(key)
+		cur, err := view.OpenCursor(key)
 		if err == nil {
 			_, oldvalue, cas, del, err := cur.YNext(false)
 			if err != nil {
@@ -322,8 +322,8 @@ func vmvccdel(
 			} else if refcas > 0 && cas != refcas {
 				err = fmt.Errorf("expected %v, got %v", refcas, cas)
 			}
-			if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-				err = fmt.Errorf("expected %q, got %q", key, oldvalue)
+			if err == nil && len(oldvalue) > 0 {
+				comparekeyvalue(key, oldvalue, options.vallen)
 			}
 		}
 		view.Abort()
@@ -350,7 +350,8 @@ func mvccDeleter(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	lsm := options.lsm
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
-		key, value = g(key, value)
+		opaque := atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 		//fmt.Printf("delete %q\n", key)
 		delidx := rnd.Intn(1000000) % len(mvccdels)
 		if lsm {
@@ -396,8 +397,8 @@ func mvccDel1(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 
 	//fmt.Printf("mvccDel1 %q %v\n", key, lsm)
 	oldvalue, cas := index.Delete(key, oldvalue, lsm)
-	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		panic(fmt.Errorf("expected %q, got %s", key, oldvalue))
+	if len(oldvalue) > 0 {
+		comparekeyvalue(key, oldvalue, options.vallen)
 	} else if len(oldvalue) > 0 {
 		ok = true
 	}
@@ -410,8 +411,8 @@ func mvccDel2(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	for i := numcpus * 2; i >= 0; i-- {
 		txn := index.BeginTxn(0xC0FFEE)
 		oldvalue = txn.Delete(key, oldvalue, lsm)
-		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+		if len(oldvalue) > 0 {
+			comparekeyvalue(key, oldvalue, options.vallen)
 		} else if len(oldvalue) > 0 {
 			ok = true
 		}
@@ -438,8 +439,8 @@ func mvccDel3(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 			panic(err)
 		}
 		oldvalue = cur.Delete(key, oldvalue, lsm)
-		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+		if len(oldvalue) > 0 {
+			comparekeyvalue(key, oldvalue, options.vallen)
 		} else if len(oldvalue) > 0 {
 			ok = true
 		}
@@ -512,9 +513,8 @@ loop:
 		} else if (int64(x) % 2) != delmod {
 			if del {
 				panic(fmt.Errorf("unexpected deleted"))
-			} else if bytes.Compare(key, value) != 0 {
-				panic(fmt.Errorf("expected %q, got %q", key, value))
 			}
+			comparekeyvalue(key, value, options.vallen)
 		} else {
 			nmisses++
 		}
@@ -649,9 +649,8 @@ func mvccRange1(index *llrb.MVCC, key, value []byte) (n int64) {
 			panic(xerr)
 		} else if (int64(x)%2) != delmod && del == true {
 			panic("unexpected delete")
-		} else if del == false && bytes.Compare(key, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, value))
 		}
+		comparekeyvalue(key, value, options.vallen)
 		n++
 	}
 	txn.Abort()
@@ -675,8 +674,8 @@ func mvccRange2(index *llrb.MVCC, key, value []byte) (n int64) {
 			panic(xerr)
 		} else if (int64(x)%2) != delmod && del == true {
 			panic("unexpected delete")
-		} else if del == false && bytes.Compare(key, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, value))
+		} else if del == false {
+			comparekeyvalue(key, value, options.vallen)
 		}
 		n++
 	}
@@ -701,8 +700,8 @@ func mvccRange3(index *llrb.MVCC, key, value []byte) (n int64) {
 			panic(xerr)
 		} else if (int64(x)%2) != delmod && del == true {
 			panic("unexpected delete")
-		} else if del == false && bytes.Compare(key, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, value))
+		} else if del == false {
+			comparekeyvalue(key, value, options.vallen)
 		}
 		n++
 	}
@@ -727,8 +726,8 @@ func mvccRange4(index *llrb.MVCC, key, value []byte) (n int64) {
 			panic(xerr)
 		} else if (int64(x)%2) != delmod && del == true {
 			panic("unexpected delete")
-		} else if del == false && bytes.Compare(key, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, value))
+		} else if del == false {
+			comparekeyvalue(key, value, options.vallen)
 		}
 		n++
 	}

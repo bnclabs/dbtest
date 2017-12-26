@@ -2,17 +2,21 @@ package main
 
 import "fmt"
 import "strconv"
+import "encoding/binary"
 import "math/rand"
 
 var _ = fmt.Sprintf("dummy")
 
 // Generate presorted load, always return unique key,
 // return nil after `n` keys.
-func Generateloads(klen, vlen, n int64) func(k, v []byte) ([]byte, []byte) {
+func Generateloads(
+	klen, vlen, n int64) func([]byte, []byte, uint64) ([]byte, []byte) {
+
 	var textint [16]byte
+	var opqbin [8]byte
 
 	keynum := int64(0)
-	return func(key, value []byte) ([]byte, []byte) {
+	return func(key, value []byte, opaque uint64) ([]byte, []byte) {
 		if keynum >= n {
 			return nil, nil
 		}
@@ -22,9 +26,15 @@ func Generateloads(klen, vlen, n int64) func(k, v []byte) ([]byte, []byte) {
 		copy(key, zeros)
 		copy(key[klen-int64(len(ascii)):klen], ascii)
 		// create value
-		value = Fixbuffer(value, int64(vlen))
-		copy(value, zeros)
-		copy(value[vlen-int64(len(ascii)):vlen], ascii)
+		if vlen > 0 {
+			value = Fixbuffer(value, int64(vlen))
+			copy(value, zeros)
+			copy(value[vlen-int64(len(ascii)):vlen], ascii)
+			if opaque > 0 {
+				binary.BigEndian.PutUint64(opqbin[:], opaque)
+				value = append(value, opqbin[:]...)
+			}
+		}
 
 		keynum++
 		return key, value
@@ -34,16 +44,17 @@ func Generateloads(klen, vlen, n int64) func(k, v []byte) ([]byte, []byte) {
 // Generate unsorted load, always return unique key,
 // return nill after `n` keys.
 func Generateloadr(
-	klen, vlen, n, seed int64) func(k, v []byte) ([]byte, []byte) {
+	klen, vlen, n, seed int64) func([]byte, []byte, uint64) ([]byte, []byte) {
 
 	var textint [16]byte
+	var opqbin [8]byte
 
 	intn := n * rndscale
 	rnd := rand.New(rand.NewSource(seed))
 	bitmap := make([]byte, ((intn / 8) + 1))
 
 	count := int64(0)
-	return func(key, value []byte) ([]byte, []byte) {
+	return func(key, value []byte, opaque uint64) ([]byte, []byte) {
 		if count >= n {
 			return nil, nil
 		}
@@ -54,9 +65,16 @@ func Generateloadr(
 		copy(key, zeros)
 		copy(key[klen-int64(len(ascii)):klen], ascii)
 		// create value
-		value = Fixbuffer(value, int64(vlen))
-		copy(value, zeros)
-		copy(value[vlen-int64(len(ascii)):vlen], ascii)
+		if vlen > 0 {
+			value = Fixbuffer(value, int64(vlen))
+			copy(value, zeros)
+			copy(value[vlen-int64(len(ascii)):vlen], ascii)
+			if opaque > 0 {
+				binary.BigEndian.PutUint64(opqbin[:], opaque)
+				opqbin[0] = 'l'
+				value = append(value, opqbin[:]...)
+			}
+		}
 
 		count++
 		return key, value
@@ -65,15 +83,17 @@ func Generateloadr(
 
 // Generate keys greater than loadn, always return unique keys.
 func Generatecreate(
-	klen, vlen, loadn, seed int64) func(k, v []byte) ([]byte, []byte) {
+	klen, vlen, loadn,
+	seed int64) func([]byte, []byte, uint64) ([]byte, []byte) {
 
 	var textint [16]byte
+	var opqbin [8]byte
 
 	loadn = int64(loadn * rndscale)
 	intn := int64(9223372036854775807) - loadn
 	rnd := rand.New(rand.NewSource(seed))
 
-	return func(key, value []byte) ([]byte, []byte) {
+	return func(key, value []byte, opaque uint64) ([]byte, []byte) {
 		keynum := int64(rnd.Intn(int(intn))) + loadn
 		ascii := strconv.AppendInt(textint[:0], int64(keynum), 10)
 		// create key
@@ -81,18 +101,26 @@ func Generatecreate(
 		copy(key, zeros)
 		copy(key[klen-int64(len(ascii)):klen], ascii)
 		// create value
-		value = Fixbuffer(value, int64(vlen))
-		copy(value, zeros)
-		copy(value[vlen-int64(len(ascii)):vlen], ascii)
+		if vlen > 0 {
+			value = Fixbuffer(value, int64(vlen))
+			copy(value, zeros)
+			copy(value[vlen-int64(len(ascii)):vlen], ascii)
+			if opaque > 0 {
+				binary.BigEndian.PutUint64(opqbin[:], opaque)
+				opqbin[0] = 'c'
+				value = append(value, opqbin[:]...)
+			}
+		}
 		return key, value
 	}
 }
 
 func Generateupdate(
 	klen, vlen, loadn,
-	seedl, seedc, mod int64) func(k, v []byte) ([]byte, []byte) {
+	seedl, seedc, mod int64) func([]byte, []byte, uint64) ([]byte, []byte) {
 
 	var textint [16]byte
+	var opqbin [8]byte
 	var getkey func()
 
 	loadn1 := loadn * rndscale
@@ -118,7 +146,7 @@ func Generateupdate(
 		}
 	}
 
-	return func(key, value []byte) ([]byte, []byte) {
+	return func(key, value []byte, opaque uint64) ([]byte, []byte) {
 		getkey()
 		ascii := strconv.AppendInt(textint[:0], int64(keynum), 10)
 		// create key
@@ -126,9 +154,16 @@ func Generateupdate(
 		copy(key, zeros)
 		copy(key[klen-int64(len(ascii)):klen], ascii)
 		// create value
-		value = Fixbuffer(value, int64(vlen))
-		copy(value, zeros)
-		copy(value[vlen-int64(len(ascii)):vlen], ascii)
+		if vlen > 0 {
+			value = Fixbuffer(value, int64(vlen))
+			copy(value, zeros)
+			copy(value[vlen-int64(len(ascii)):vlen], ascii)
+			if opaque > 0 {
+				binary.BigEndian.PutUint64(opqbin[:], opaque)
+				opqbin[0] = 'u'
+				value = append(value, opqbin[:]...)
+			}
+		}
 		return key, value
 	}
 }
@@ -191,10 +226,11 @@ func Generatereadseq(klen, loadn, seedl int64) func([]byte, int64) []byte {
 }
 
 func Generatedelete(
-	klen, vlen,
-	loadn, seedl, seedc, mod int64) func(k, v []byte) ([]byte, []byte) {
+	klen, vlen, loadn, seedl, seedc,
+	mod int64) func([]byte, []byte, uint64) ([]byte, []byte) {
 
 	var textint [16]byte
+	var opqbin [8]byte
 	var getkey func()
 
 	loadn1 := loadn * rndscale
@@ -220,7 +256,7 @@ func Generatedelete(
 		}
 	}
 
-	return func(key, value []byte) ([]byte, []byte) {
+	return func(key, value []byte, opaque uint64) ([]byte, []byte) {
 		getkey()
 		ascii := strconv.AppendInt(textint[:0], int64(keynum), 10)
 		// create key
@@ -228,9 +264,16 @@ func Generatedelete(
 		copy(key, zeros)
 		copy(key[klen-int64(len(ascii)):klen], ascii)
 		// create value
-		value = Fixbuffer(value, int64(vlen))
-		copy(value, zeros)
-		copy(value[vlen-int64(len(ascii)):vlen], ascii)
+		if vlen > 0 {
+			value = Fixbuffer(value, int64(vlen))
+			copy(value, zeros)
+			copy(value[vlen-int64(len(ascii)):vlen], ascii)
+			if opaque > 0 {
+				binary.BigEndian.PutUint64(opqbin[:], opaque)
+				opqbin[0] = 'd'
+				value = append(value, opqbin[:]...)
+			}
+		}
 		return key, value
 	}
 }

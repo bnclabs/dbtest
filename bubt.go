@@ -181,9 +181,8 @@ loop:
 		} else if (int64(x) % 2) != delmod {
 			if del {
 				panic(fmt.Errorf("unexpected deleted"))
-			} else if bytes.Compare(key, value) != 0 {
-				panic(fmt.Errorf("expected %q, got %q", key, value))
 			}
+			comparekeyvalue(key, value, options.vallen)
 		} else {
 			nmisses++
 		}
@@ -278,8 +277,8 @@ func bubtRange1(index *bubt.Snapshot, key, value []byte) (n int64) {
 			panic(xerr)
 		} else if (int64(x)%2) != delmod && del == true {
 			panic("unexpected delete")
-		} else if del == false && bytes.Compare(key, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, value))
+		} else if del == false {
+			comparekeyvalue(key, value, options.vallen)
 		}
 		n++
 	}
@@ -305,8 +304,8 @@ func bubtRange2(index *bubt.Snapshot, key, value []byte) (n int64) {
 			panic(xerr)
 		} else if (int64(x)%2) != delmod && del == true {
 			panic("unexpected delete")
-		} else if del == false && bytes.Compare(key, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, value))
+		} else if del == false {
+			comparekeyvalue(key, value, options.vallen)
 		}
 		n++
 	}
@@ -318,12 +317,12 @@ func makeiterator(
 	klen, vlen, entries, mod int64, mindex *llrb.LLRB) api.Iterator {
 
 	g := Generateloads(klen, vlen, entries)
-	key, value, seqno := make([]byte, 16), make([]byte, 16), uint64(0)
+	key, value := make([]byte, 16), make([]byte, 16)
 
 	return func(fin bool) ([]byte, []byte, uint64, bool, error) {
-		key, value = g(key, value)
+		opaque := atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 		if key != nil {
-			seqno++
 			x, _ := strconv.Atoi(Bytes2str(key))
 			deleted := false
 			mindex.Set(key, value, nil)
@@ -331,8 +330,8 @@ func makeiterator(
 				deleted = true
 				mindex.Delete(key, nil, true /*lsm*/)
 			}
-			//fmt.Printf("iterate %q %q %v %v\n", key, value, seqno, deleted)
-			return key, value, seqno, deleted, nil
+			//fmt.Printf("iterate %q %q %v %v\n", key, value, opaque, deleted)
+			return key, value, opaque, deleted, nil
 		}
 		return nil, nil, 0, false, io.EOF
 	}

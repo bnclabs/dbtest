@@ -1,6 +1,8 @@
 package main
 
 import "os"
+import "fmt"
+import "bytes"
 import "unsafe"
 import "reflect"
 import "path/filepath"
@@ -30,4 +32,13 @@ func DirSize(path string) (int64, error) {
 		return err
 	})
 	return size, err
+}
+
+func comparekeyvalue(key, value []byte, vlen int) bool {
+	if vlen > 0 && len(value) > 0 {
+		if bytes.Compare(key, value[:len(key)]) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", key, value))
+		}
+	}
+	return true
 }

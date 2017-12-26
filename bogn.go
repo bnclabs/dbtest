@@ -95,14 +95,16 @@ func bognLoad(index *bogn.Bogn, seedl int64) error {
 	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
 
-	key, value := make([]byte, 16), make([]byte, 16)
 	now, oldvalue := time.Now(), make([]byte, 16)
-	for key, value = g(key, value); key != nil; key, value = g(key, value) {
+	opaque := atomic.AddUint64(&seqno, 1)
+	key, value := g(make([]byte, 16), make([]byte, 16), opaque)
+	for ; key != nil; key, value = g(key, value, opaque) {
 		//fmt.Printf("load %q\n", key)
 		oldvalue, _ := index.Set(key, value, oldvalue)
 		if len(oldvalue) > 0 {
 			panic(fmt.Errorf("unexpected %q", oldvalue))
 		}
+		opaque = atomic.AddUint64(&seqno, 1)
 	}
 	atomic.AddInt64(&numentries, int64(options.load))
 	atomic.AddInt64(&totalwrites, int64(options.load))
@@ -125,7 +127,8 @@ func bognCreater(index *bogn.Bogn, n, seedc int64, wg *sync.WaitGroup) {
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
-		key, value = g(key, value)
+		opaque := atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 		setidx := rnd.Intn(1000000) % len(bognsets)
 		refcas, _ := bognsets[setidx](index, key, value, oldvalue)
 		oldvalue, cas, del, ok := index.Get(key, oldvalue)
@@ -135,9 +138,8 @@ func bognCreater(index *bogn.Bogn, n, seedc int64, wg *sync.WaitGroup) {
 			panic("unexpected delete")
 		} else if refcas > 0 && cas != refcas {
 			panic(fmt.Errorf("expected %v, got %v", refcas, cas))
-		} else if bytes.Compare(key, oldvalue) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
 		}
+		comparekeyvalue(key, oldvalue, options.vallen)
 
 		atomic.AddInt64(&numentries, 1)
 		atomic.AddInt64(&totalwrites, 1)
@@ -163,9 +165,8 @@ func vbognupdater(
 		err = fmt.Errorf("unexpected delete")
 	} else if refcas > 0 && cas != refcas {
 		err = fmt.Errorf("expected %v, got %v", refcas, cas)
-	} else if bytes.Compare(key, oldvalue) != 0 {
-		err = fmt.Errorf("expected %q, got %q", key, oldvalue)
 	}
+	comparekeyvalue(key, oldvalue, options.vallen)
 	if err != nil && i == 0 {
 		panic(err)
 	} else if err != nil {
@@ -186,7 +187,8 @@ func bognUpdater(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
-		key, value = g(key, value)
+		opaque := atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 		setidx := rnd.Intn(1000000) % len(bognsets)
 		for i := 2; i >= 0; i-- {
 			refcas, _ := bognsets[setidx](index, key, value, oldvalue)
@@ -212,16 +214,16 @@ func bognUpdater(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 func bognSet1(index *bogn.Bogn, key, value, oldvalue []byte) (uint64, []byte) {
 	oldvalue, cas := index.Set(key, value, oldvalue)
 	//fmt.Printf("update1 %q %q %q \n", key, value, oldvalue)
-	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+	if len(oldvalue) > 0 {
+		comparekeyvalue(key, oldvalue, options.vallen)
 	}
 	return cas, oldvalue
 }
 
 func bognverifyset2(err error, i int, key, oldvalue []byte) string {
 	if err != nil {
-	} else if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		err = fmt.Errorf("expected %q, got %q", key, oldvalue)
+	} else if len(oldvalue) > 0 {
+		comparekeyvalue(key, oldvalue, options.vallen)
 	}
 	if err != nil && i == 0 {
 		panic(err)
@@ -239,9 +241,8 @@ func bognSet2(index *bogn.Bogn, key, value, oldvalue []byte) (uint64, []byte) {
 			oldcas = 0
 		} else if oldcas == 0 {
 			panic(fmt.Errorf("unexpected %v", oldcas))
-		} else if bytes.Compare(key, oldvalue) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
 		}
+		comparekeyvalue(key, oldvalue, options.vallen)
 		oldvalue, cas, err := index.SetCAS(key, value, oldvalue, oldcas)
 		//fmt.Printf("update2 %q %q %q \n", key, value, oldvalue)
 		if bognverifyset2(err, i, key, oldvalue) == "ok" {
@@ -256,8 +257,8 @@ func bognSet3(index *bogn.Bogn, key, value, oldvalue []byte) (uint64, []byte) {
 		txn := index.BeginTxn(0xC0FFEE)
 		oldvalue = txn.Set(key, value, oldvalue)
 		//fmt.Printf("update3 %q %q %q \n", key, value, oldvalue)
-		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+		if len(oldvalue) > 0 {
+			comparekeyvalue(key, oldvalue, options.vallen)
 		}
 		err := txn.Commit()
 		if err == nil {
@@ -281,8 +282,8 @@ func bognSet4(index *bogn.Bogn, key, value, oldvalue []byte) (uint64, []byte) {
 		}
 		oldvalue = cur.Set(key, value, oldvalue)
 		//fmt.Printf("update4 %q %q %q \n", key, value, oldvalue)
-		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+		if len(oldvalue) > 0 {
+			comparekeyvalue(key, oldvalue, options.vallen)
 		}
 		err = txn.Commit()
 		if err == nil {
@@ -330,8 +331,8 @@ func vbogndel(
 			} else if refcas > 0 && cas != refcas {
 				err = fmt.Errorf("expected %v, got %v", refcas, cas)
 			}
-			if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-				err = fmt.Errorf("expected %q, got %q", key, oldvalue)
+			if err == nil && len(oldvalue) > 0 {
+				comparekeyvalue(key, oldvalue, options.vallen)
 			}
 		}
 		view.Abort()
@@ -358,7 +359,8 @@ func bognDeleter(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	lsm := options.lsm
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
-		key, value = g(key, value)
+		opaque := atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 		//fmt.Printf("delete %q\n", key)
 		delidx := rnd.Intn(1000000) % len(bogndels)
 		if lsm {
@@ -366,7 +368,7 @@ func bognDeleter(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 		}
 		for i := 2; i >= 0; i-- {
 			refcas, ok1 := bogndels[delidx](index, key, value, lsm)
-			oldvalue, _, _, ok2 := index.Get(key, oldvalue)
+			oldvalue, refcas, _, ok2 := index.Get(key, oldvalue)
 			if vbogndel(index, key, oldvalue, refcas, i, lsm, ok2) == "ok" {
 				if ok1 == false && lsm == false {
 					xdeletes++
@@ -402,8 +404,8 @@ func bognDel1(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
 	oldvalue, cas := index.Delete(key, oldvalue, lsm)
-	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		panic(fmt.Errorf("expected %q, got %s", key, oldvalue))
+	if len(oldvalue) > 0 {
+		comparekeyvalue(key, oldvalue, options.vallen)
 	} else if len(oldvalue) > 0 {
 		ok = true
 	}
@@ -416,8 +418,8 @@ func bognDel2(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	for i := numcpus * 2; i >= 0; i-- {
 		txn := index.BeginTxn(0xC0FFEE)
 		oldvalue = txn.Delete(key, oldvalue, lsm)
-		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+		if len(oldvalue) > 0 {
+			comparekeyvalue(key, oldvalue, options.vallen)
 		} else if len(oldvalue) > 0 {
 			ok = true
 		}
@@ -444,8 +446,8 @@ func bognDel3(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
 			panic(err)
 		}
 		oldvalue = cur.Delete(key, oldvalue, lsm)
-		if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+		if len(oldvalue) > 0 {
+			comparekeyvalue(key, oldvalue, options.vallen)
 		} else if len(oldvalue) > 0 {
 			ok = true
 		}
@@ -518,9 +520,8 @@ loop:
 		} else if (int64(x) % 2) != delmod {
 			if del {
 				panic(fmt.Errorf("unexpected deleted"))
-			} else if bytes.Compare(key, value) != 0 {
-				panic(fmt.Errorf("expected %q, got %q", key, value))
 			}
+			comparekeyvalue(key, value, options.vallen)
 		} else {
 			nmisses++
 		}
@@ -648,9 +649,8 @@ func bognRange1(index *bogn.Bogn, key, value []byte) (n int64) {
 			panic(xerr)
 		} else if (int64(x)%2) != delmod && del == true {
 			panic("unexpected delete")
-		} else if del == false && bytes.Compare(key, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, value))
 		}
+		comparekeyvalue(key, value, options.vallen)
 		n++
 	}
 	txn.Abort()
@@ -674,9 +674,8 @@ func bognRange2(index *bogn.Bogn, key, value []byte) (n int64) {
 			panic(xerr)
 		} else if (int64(x)%2) != delmod && del == true {
 			panic("unexpected delete")
-		} else if del == false && bytes.Compare(key, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, value))
 		}
+		comparekeyvalue(key, value, options.vallen)
 		n++
 	}
 	txn.Abort()
@@ -700,9 +699,8 @@ func bognRange3(index *bogn.Bogn, key, value []byte) (n int64) {
 			panic(xerr)
 		} else if (int64(x)%2) != delmod && del == true {
 			panic("unexpected delete")
-		} else if del == false && bytes.Compare(key, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, value))
 		}
+		comparekeyvalue(key, value, options.vallen)
 		n++
 	}
 	view.Abort()
@@ -726,9 +724,8 @@ func bognRange4(index *bogn.Bogn, key, value []byte) (n int64) {
 			panic(xerr)
 		} else if (int64(x)%2) != delmod && del == true {
 			panic("unexpected delete")
-		} else if del == false && bytes.Compare(key, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, value))
 		}
+		comparekeyvalue(key, value, options.vallen)
 		n++
 	}
 	view.Abort()

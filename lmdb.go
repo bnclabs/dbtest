@@ -4,7 +4,6 @@ import "os"
 import "fmt"
 import "sync"
 import "time"
-import "bytes"
 import "strings"
 import "strconv"
 import "path/filepath"
@@ -152,14 +151,16 @@ func lmdbLoad(env *lmdb.Env, dbi lmdb.DBI, seedl int64) error {
 	now := time.Now()
 
 	klen, vlen := int64(options.keylen), int64(options.vallen)
+	opaque := atomic.AddUint64(&seqno, 1)
 	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
 
 	populate := func(txn *lmdb.Txn) (err error) {
-		key, value = g(key, value)
+		key, value = g(key, value, opaque)
 		//if "00000000000000000000000000699067" == string(key) {
 		//	fmt.Println("load", string(key))
 		//}
-		for ; key != nil; key, value = g(key, value) {
+		for ; key != nil; key, value = g(key, value, opaque) {
+			opaque = atomic.AddUint64(&seqno, 1)
 			if err := txn.Put(dbi, key, value, 0); err != nil {
 				return err
 			}
@@ -202,7 +203,8 @@ func lmdbCreater(
 		//if atomic.LoadInt64(&numentries) > entries {
 		//	time.Sleep(1000 * time.Microsecond)
 		//}
-		key, value = g(key, value)
+		opaque := atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 		if err := env.Update(put); err != nil {
 			log.Errorf("key %q err : %v", key, err)
 			return
@@ -245,7 +247,8 @@ func lmdbUpdater(
 
 	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
-		key, value = g(key, value)
+		opaque := atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 		if err := env.Update(update); err != nil {
 			log.Errorf("key %q err : %v", key, err)
 			return
@@ -288,7 +291,8 @@ func lmdbDeleter(
 		//if atomic.LoadInt64(&numentries) < entries {
 		//	time.Sleep(1000 * time.Microsecond)
 		//}
-		key, value = g(key, value)
+		opaque := atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 		if err := env.Update(delete); err != nil {
 			//log.Infof("key %q err : %v", key, err)
 			xdeletes++
@@ -330,9 +334,8 @@ func lmdbGetter(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
 		} else if (int64(x) % updtdel) != delmod {
 			if err != nil {
 				return err
-			} else if bytes.Compare(key, value) != 0 {
-				return fmt.Errorf("expected %q, got %q", key, value)
 			}
+			comparekeyvalue(key, value, options.vallen)
 		} else {
 			nmisses++
 		}
@@ -398,9 +401,8 @@ func lmdbRanger(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
 			} else if (int64(x) % updtdel) != delmod {
 				if err != nil {
 					return err
-				} else if bytes.Compare(key, value) != 0 {
-					return fmt.Errorf("expected %q, got %q", key, value)
 				}
+				comparekeyvalue(key, value, options.vallen)
 			} else {
 				nmisses++
 			}

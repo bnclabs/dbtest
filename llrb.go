@@ -81,14 +81,16 @@ func llrbLoad(index *llrb.LLRB, seedl int64) error {
 	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
 
-	key, value := make([]byte, 16), make([]byte, 16)
 	now, oldvalue := time.Now(), make([]byte, 16)
-	for key, value = g(key, value); key != nil; key, value = g(key, value) {
+	opaque := atomic.AddUint64(&seqno, 1)
+	key, value := g(make([]byte, 16), make([]byte, 16), opaque)
+	for ; key != nil; key, value = g(key, value, opaque) {
 		//fmt.Printf("load %q\n", key)
 		oldvalue, _ := index.Set(key, value, oldvalue)
 		if len(oldvalue) > 0 {
 			panic(fmt.Errorf("unexpected %q", oldvalue))
 		}
+		opaque = atomic.AddUint64(&seqno, 1)
 	}
 	atomic.AddInt64(&numentries, int64(options.load))
 	atomic.AddInt64(&totalwrites, int64(options.load))
@@ -111,7 +113,8 @@ func llrbCreater(index *llrb.LLRB, n, seedc int64, wg *sync.WaitGroup) {
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
-		key, value = g(key, value)
+		opaque := atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 		setidx := rnd.Intn(1000000) % 4
 		refcas, _ := llrbsets[setidx](index, key, value, oldvalue)
 		oldvalue, cas, del, ok := index.Get(key, oldvalue)
@@ -121,9 +124,8 @@ func llrbCreater(index *llrb.LLRB, n, seedc int64, wg *sync.WaitGroup) {
 			panic("unexpected delete")
 		} else if refcas > 0 && cas != refcas {
 			panic(fmt.Errorf("expected %v, got %v", refcas, cas))
-		} else if bytes.Compare(key, oldvalue) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
 		}
+		comparekeyvalue(key, oldvalue, options.vallen)
 
 		atomic.AddInt64(&numentries, 1)
 		atomic.AddInt64(&totalwrites, 1)
@@ -150,9 +152,8 @@ func vllrbupdater(
 		err = fmt.Errorf("unexpected delete")
 	} else if refcas > 0 && cas != refcas {
 		err = fmt.Errorf("expected %v, got %v", refcas, cas)
-	} else if bytes.Compare(key, oldvalue) != 0 {
-		err = fmt.Errorf("expected %q, got %q", key, oldvalue)
 	}
+	comparekeyvalue(key, oldvalue, options.vallen)
 	if err != nil && i == 0 {
 		panic(err)
 	} else if err != nil {
@@ -173,7 +174,8 @@ func llrbUpdater(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
-		key, value = g(key, value)
+		opaque := atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 		setidx := rnd.Intn(1000000) % 4
 		for i := 2; i >= 0; i-- {
 			refcas, oldvalue := llrbsets[setidx](index, key, value, oldvalue)
@@ -204,16 +206,16 @@ func llrbUpdater(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 func llrbSet1(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
 	oldvalue, cas := index.Set(key, value, oldvalue)
 	//fmt.Printf("update1 %q %q %q \n", key, value, oldvalue)
-	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+	if len(oldvalue) > 0 {
+		comparekeyvalue(key, oldvalue, options.vallen)
 	}
 	return cas, oldvalue
 }
 
 func llrbverifyset2(err error, i int, key, oldvalue []byte) string {
 	if err != nil {
-	} else if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		err = fmt.Errorf("expected %q, got %q", key, oldvalue)
+	} else if len(oldvalue) > 0 {
+		comparekeyvalue(key, oldvalue, options.vallen)
 	}
 	if err != nil && i == 0 {
 		panic(err)
@@ -231,9 +233,8 @@ func llrbSet2(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
 			oldcas = 0
 		} else if oldcas == 0 {
 			panic(fmt.Errorf("unexpected %v", oldcas))
-		} else if bytes.Compare(key, oldvalue) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
 		}
+		comparekeyvalue(key, oldvalue, options.vallen)
 		oldvalue, cas, err := index.SetCAS(key, value, oldvalue, oldcas)
 		//fmt.Printf("update2 %q %q %q \n", key, value, oldvalue)
 		if llrbverifyset2(err, i, key, oldvalue) == "ok" {
@@ -247,8 +248,8 @@ func llrbSet3(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
 	txn := index.BeginTxn(0xC0FFEE)
 	oldvalue = txn.Set(key, value, oldvalue)
 	//fmt.Printf("update3 %q %q %q \n", key, value, oldvalue)
-	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+	if len(oldvalue) > 0 {
+		comparekeyvalue(key, oldvalue, options.vallen)
 	}
 	if err := txn.Commit(); err != nil {
 		panic(err)
@@ -264,8 +265,8 @@ func llrbSet4(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
 	}
 	oldvalue = cur.Set(key, value, oldvalue)
 	//fmt.Printf("update4 %q %q %q \n", key, value, oldvalue)
-	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
+	if len(oldvalue) > 0 {
+		comparekeyvalue(key, oldvalue, options.vallen)
 	}
 	if err := txn.Commit(); err != nil {
 		panic(err)
@@ -309,8 +310,8 @@ func vllrbdel(
 			} else if refcas > 0 && cas != refcas {
 				err = fmt.Errorf("expected %v, got %v", refcas, cas)
 			}
-			if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-				err = fmt.Errorf("expected %q, got %q", key, oldvalue)
+			if len(oldvalue) > 0 {
+				comparekeyvalue(key, oldvalue, options.vallen)
 			}
 		}
 		view.Abort()
@@ -337,7 +338,8 @@ func llrbDeleter(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	lsmmap := map[int]bool{0: true, 1: false}
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
-		key, value = g(key, value)
+		opaque := atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 		//fmt.Printf("delete %q\n", key)
 		ln := len(llrbdels)
 		delidx, lsm := rnd.Intn(1000000)%ln, lsmmap[rnd.Intn(1000000)%2]
@@ -383,9 +385,8 @@ func llrbDel1(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
 	oldvalue, cas := index.Delete(key, oldvalue, lsm)
-	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		panic(fmt.Errorf("expected %q, got %s", key, oldvalue))
-	} else if len(oldvalue) > 0 {
+	if len(oldvalue) > 0 {
+		comparekeyvalue(key, oldvalue, options.vallen)
 		ok = true
 	}
 	return cas, ok
@@ -396,9 +397,8 @@ func llrbDel2(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
 
 	txn := index.BeginTxn(0xC0FFEE)
 	oldvalue = txn.Delete(key, oldvalue, lsm)
-	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
-	} else if len(oldvalue) > 0 {
+	if len(oldvalue) > 0 {
+		comparekeyvalue(key, oldvalue, options.vallen)
 		ok = true
 	}
 	if err := txn.Commit(); err != nil {
@@ -416,9 +416,8 @@ func llrbDel3(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
 		panic(err)
 	}
 	oldvalue = cur.Delete(key, oldvalue, lsm)
-	if len(oldvalue) > 0 && bytes.Compare(key, oldvalue) != 0 {
-		panic(fmt.Errorf("expected %q, got %q", key, oldvalue))
-	} else if len(oldvalue) > 0 {
+	if len(oldvalue) > 0 {
+		comparekeyvalue(key, oldvalue, options.vallen)
 		ok = true
 	}
 	if err := txn.Commit(); err != nil {
@@ -476,9 +475,8 @@ loop:
 		} else if (int64(x) % 2) != delmod {
 			if del {
 				panic(fmt.Errorf("unexpected deleted"))
-			} else if bytes.Compare(key, value) != 0 {
-				panic(fmt.Errorf("expected %q, got %q", key, value))
 			}
+			comparekeyvalue(key, value, options.vallen)
 		} else {
 			nmisses++
 		}
@@ -605,8 +603,8 @@ func llrbRange1(index *llrb.LLRB, key, value []byte) (n int64) {
 			panic(xerr)
 		} else if (int64(x)%2) != delmod && del == true {
 			panic("unexpected delete")
-		} else if del == false && bytes.Compare(key, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, value))
+		} else if del == false {
+			comparekeyvalue(key, value, options.vallen)
 		}
 		n++
 	}
@@ -631,8 +629,8 @@ func llrbRange2(index *llrb.LLRB, key, value []byte) (n int64) {
 			panic(xerr)
 		} else if (int64(x)%2) != delmod && del == true {
 			panic("unexpected delete")
-		} else if del == false && bytes.Compare(key, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, value))
+		} else if del == false {
+			comparekeyvalue(key, value, options.vallen)
 		}
 		n++
 	}
@@ -657,8 +655,8 @@ func llrbRange3(index *llrb.LLRB, key, value []byte) (n int64) {
 			panic(xerr)
 		} else if (int64(x)%2) != delmod && del == true {
 			panic("unexpected delete")
-		} else if del == false && bytes.Compare(key, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, value))
+		} else if del == false {
+			comparekeyvalue(key, value, options.vallen)
 		}
 		n++
 	}
@@ -683,8 +681,8 @@ func llrbRange4(index *llrb.LLRB, key, value []byte) (n int64) {
 			panic(xerr)
 		} else if (int64(x)%2) != delmod && del == true {
 			panic("unexpected delete")
-		} else if del == false && bytes.Compare(key, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, value))
+		} else if del == false {
+			comparekeyvalue(key, value, options.vallen)
 		}
 		n++
 	}
