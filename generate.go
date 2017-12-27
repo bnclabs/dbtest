@@ -64,6 +64,7 @@ func Generateloadr(
 		key = Fixbuffer(key, int64(klen))
 		copy(key, zeros)
 		copy(key[klen-int64(len(ascii)):klen], ascii)
+		//fmt.Printf("load %q\n", key)
 		// create value
 		if vlen > 0 {
 			value = Fixbuffer(value, int64(vlen))
@@ -100,6 +101,7 @@ func Generatecreate(
 		key = Fixbuffer(key, int64(klen))
 		copy(key, zeros)
 		copy(key[klen-int64(len(ascii)):klen], ascii)
+		//fmt.Printf("create %q\n", key)
 		// create value
 		if vlen > 0 {
 			value = Fixbuffer(value, int64(vlen))
@@ -153,6 +155,7 @@ func Generateupdate(
 		key = Fixbuffer(key, int64(klen))
 		copy(key, zeros)
 		copy(key[klen-int64(len(ascii)):klen], ascii)
+		//fmt.Printf("update %q\n", key)
 		// create value
 		if vlen > 0 {
 			value = Fixbuffer(value, int64(vlen))
@@ -263,6 +266,7 @@ func Generatedelete(
 		key = Fixbuffer(key, int64(klen))
 		copy(key, zeros)
 		copy(key[klen-int64(len(ascii)):klen], ascii)
+		//fmt.Printf("delete %q\n", key)
 		// create value
 		if vlen > 0 {
 			value = Fixbuffer(value, int64(vlen))

@@ -187,26 +187,12 @@ func lmdbCreater(
 	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generatecreate(klen, vlen, n, seedc)
 
-	put := func(txn *lmdb.Txn) (err error) {
-		//if "00000000000000000000000000699067" == string(key) {
-		//	fmt.Println("create", string(key))
-		//}
-		if err := txn.Put(dbi, key, value, 0); err != nil {
-			return err
-		}
-		return nil
-	}
-
 	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 	//entries := int64(float64(options.entries) * 1.1)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
-		//if atomic.LoadInt64(&numentries) > entries {
-		//	time.Sleep(1000 * time.Microsecond)
-		//}
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
-		if err := env.Update(put); err != nil {
-			log.Errorf("key %q err : %v", key, err)
+		if err := lmdbDocreate(env, dbi, key, value); err != nil {
 			return
 		}
 		atomic.AddInt64(&numentries, 1)
@@ -222,6 +208,23 @@ func lmdbCreater(
 	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), time.Since(epoch))
 }
 
+func lmdbDocreate(env *lmdb.Env, dbi lmdb.DBI, key, value []byte) error {
+	put := func(txn *lmdb.Txn) (err error) {
+		//if "00000000000000000000000000699067" == string(key) {
+		//	fmt.Println("create", string(key))
+		//}
+		if err := txn.Put(dbi, key, value, 0); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err := env.Update(put); err != nil {
+		log.Errorf("key %q err : %v", key, err)
+		return err
+	}
+	return nil
+}
+
 func lmdbUpdater(
 	env *lmdb.Env, dbi lmdb.DBI, n, seedl, seedc int64, wg *sync.WaitGroup) {
 
@@ -232,26 +235,14 @@ func lmdbUpdater(
 	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generateupdate(klen, vlen, n, seedl, seedc, -1)
 
-	missingerr := "No matching key/data pair found"
-	update := func(txn *lmdb.Txn) (err error) {
-		value, err := txn.Get(dbi, key)
-		if err != nil && strings.Contains(err.Error(), missingerr) {
-			atomic.AddInt64(&numentries, 1)
-		}
-
-		if err := txn.Put(dbi, key, value, 0); err != nil {
-			return err
-		}
-		return nil
-	}
-
 	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
-		if err := env.Update(update); err != nil {
-			log.Errorf("key %q err : %v", key, err)
+		if new, err := lmdbDoupdate(env, dbi, key, value); err != nil {
 			return
+		} else if new {
+			atomic.AddInt64(&numentries, 1)
 		}
 		atomic.AddInt64(&totalwrites, 1)
 		if nupdates = nupdates + 1; nupdates%markercount == 0 {
@@ -265,6 +256,25 @@ func lmdbUpdater(
 	fmt.Printf(fmsg, nupdates, time.Since(epoch))
 }
 
+func lmdbDoupdate(
+	env *lmdb.Env, dbi lmdb.DBI, key, value []byte) (new bool, err error) {
+
+	missingerr := "No matching key/data pair found"
+
+	update := func(txn *lmdb.Txn) (err error) {
+		_, err = txn.Get(dbi, key)
+		new = err != nil && strings.Contains(err.Error(), missingerr)
+		if err := txn.Put(dbi, key, value, 0); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err = env.Update(update); err != nil {
+		log.Errorf("key %q err : %v", key, err)
+	}
+	return
+}
+
 func lmdbDeleter(
 	env *lmdb.Env, dbi lmdb.DBI, n, seedl, seedc int64, wg *sync.WaitGroup) {
 
@@ -275,26 +285,14 @@ func lmdbDeleter(
 	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generatedelete(klen, vlen, n, seedl, seedc, delmod)
 
-	delete := func(txn *lmdb.Txn) (err error) {
-		//if "00000000000000000000000000699067" == string(key) {
-		//	fmt.Println("delete", string(key))
-		//}
-		if err := txn.Del(dbi, key, nil); err != nil {
-			return err
-		}
-		return nil
-	}
-
 	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 	//entries := int64(float64(options.entries) * 1.1)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
-		//if atomic.LoadInt64(&numentries) < entries {
-		//	time.Sleep(1000 * time.Microsecond)
-		//}
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
-		if err := env.Update(delete); err != nil {
-			//log.Infof("key %q err : %v", key, err)
+		if x, err := lmdbDodelete(env, dbi, key, value); err != nil {
+			return
+		} else if x {
 			xdeletes++
 		} else {
 			ndeletes++
@@ -310,6 +308,22 @@ func lmdbDeleter(
 	}
 	fmsg := "at exit, lmdbDeleter %v:%v items in %v\n"
 	fmt.Printf(fmsg, ndeletes, xdeletes, time.Since(epoch))
+}
+
+func lmdbDodelete(
+	env *lmdb.Env, dbi lmdb.DBI, key, value []byte) (x bool, err error) {
+
+	delete := func(txn *lmdb.Txn) (err error) {
+		if err := txn.Del(dbi, key, nil); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err = env.Update(delete); err != nil {
+		//log.Infof("key %q err : %v", key, err)
+		return true, err
+	}
+	return false, err
 }
 
 func lmdbGetter(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {

@@ -1,6 +1,7 @@
 package main
 
 import "io"
+import "os"
 import "fmt"
 import "sync"
 import "time"
@@ -10,10 +11,25 @@ import "strconv"
 import "sync/atomic"
 import "math/rand"
 
+import "github.com/prataprc/golog"
 import "github.com/prataprc/gostore/api"
 import "github.com/prataprc/gostore/llrb"
+import "github.com/bmatsuo/lmdb-go/lmdb"
 
 func testllrb() error {
+	// LMDB instance
+	lmdbpath = makelmdbpath()
+	defer func() {
+		if err := os.RemoveAll(lmdbpath); err != nil {
+			log.Errorf("%v", err)
+		}
+	}()
+	lmdbenv, lmdbdbi, err := initlmdb(lmdb.NoSync | lmdb.NoMetaSync)
+	if err != nil {
+		return err
+	}
+	defer lmdbenv.Close()
+
 	setts := llrb.Defaultsettings()
 	index := llrb.NewLLRB("dbtest", setts)
 	defer index.Destroy()
@@ -23,18 +39,21 @@ func testllrb() error {
 	if err := llrbLoad(index, seedl); err != nil {
 		return err
 	}
+	if err = lmdbLoad(lmdbenv, lmdbdbi, seedl); err != nil {
+		return err
+	}
 
 	var wwg, rwg sync.WaitGroup
 	fin := make(chan struct{})
 
-	go llrbvalidator(index, true /*log*/, &rwg, fin)
+	go llrbvalidator(lmdbenv, lmdbdbi, index, true /*log*/, &rwg, fin)
 	rwg.Add(1)
 
 	// writer routines
 	n := atomic.LoadInt64(&numentries)
-	go llrbCreater(index, n, seedc, &wwg)
-	go llrbUpdater(index, n, seedl, seedc, &wwg)
-	go llrbDeleter(index, n, seedl, seedc, &wwg)
+	go llrbCreater(lmdbenv, lmdbdbi, index, n, seedc, &wwg)
+	go llrbUpdater(lmdbenv, lmdbdbi, index, n, seedl, seedc, &wwg)
+	go llrbDeleter(lmdbenv, lmdbdbi, index, n, seedl, seedc, &wwg)
 	wwg.Add(3)
 	// reader routines
 	for i := 0; i < options.cpu; i++ {
@@ -53,10 +72,29 @@ func testllrb() error {
 	return nil
 }
 
+var llrbrw sync.RWMutex
+
 func llrbvalidator(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *llrb.LLRB, log bool, wg *sync.WaitGroup, fin chan struct{}) {
 
 	defer wg.Done()
+
+	do := func() {
+		if log {
+			index.Log()
+		}
+		now := time.Now()
+		index.Validate()
+		fmt.Printf("Took %v to validate index\n\n", time.Since(now))
+		func() {
+			llrbrw.Lock()
+			defer llrbrw.Unlock()
+			compareLlrbLmdb(index, lmdbenv, lmdbdbi)
+		}()
+	}
+
+	defer do()
 
 	tick := time.NewTicker(10 * time.Second)
 	for {
@@ -66,18 +104,12 @@ func llrbvalidator(
 			return
 		default:
 		}
-
-		if log {
-			index.Log()
-		}
-
-		now := time.Now()
-		index.Validate()
-		fmt.Printf("Took %v to validate index\n", time.Since(now))
+		do()
 	}
 }
 
 func llrbLoad(index *llrb.LLRB, seedl int64) error {
+
 	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
 
@@ -95,7 +127,7 @@ func llrbLoad(index *llrb.LLRB, seedl int64) error {
 	atomic.AddInt64(&numentries, int64(options.load))
 	atomic.AddInt64(&totalwrites, int64(options.load))
 
-	fmt.Printf("Loaded %v items in %v\n", options.load, time.Since(now))
+	fmt.Printf("Loaded %v items in %v\n\n", options.load, time.Since(now))
 	return nil
 }
 
@@ -103,7 +135,10 @@ var llrbsets = []func(index *llrb.LLRB, k, v, ov []byte) (uint64, []byte){
 	llrbSet1, llrbSet2, llrbSet3, llrbSet4,
 }
 
-func llrbCreater(index *llrb.LLRB, n, seedc int64, wg *sync.WaitGroup) {
+func llrbCreater(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
+	index *llrb.LLRB, n, seedc int64, wg *sync.WaitGroup) {
+
 	defer wg.Done()
 
 	klen, vlen := int64(options.keylen), int64(options.vallen)
@@ -112,7 +147,11 @@ func llrbCreater(index *llrb.LLRB, n, seedc int64, wg *sync.WaitGroup) {
 	key, value := make([]byte, 16), make([]byte, 16)
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
-	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+
+	do := func() error {
+		llrbrw.RLock()
+		defer llrbrw.RUnlock()
+
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
 		setidx := rnd.Intn(1000000) % 4
@@ -135,6 +174,17 @@ func llrbCreater(index *llrb.LLRB, n, seedc int64, wg *sync.WaitGroup) {
 			fmsg := "llrbCreated {%v items in %v} {%v items in %v} count:%v\n"
 			fmt.Printf(fmsg, markercount, x, nc, y.Round(time.Second), count)
 			now = time.Now()
+		}
+		// update the lmdb object
+		if err := lmdbDocreate(lmdbenv, lmdbdbi, key, value); err != nil {
+			panic(err)
+		}
+		return nil
+	}
+
+	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+		if err := do(); err != nil {
+			return
 		}
 		runtime.Gosched()
 	}
@@ -163,7 +213,9 @@ func vllrbupdater(
 	return "ok"
 }
 
-func llrbUpdater(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
+func llrbUpdater(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
+	index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	var nupdates int64
@@ -173,7 +225,11 @@ func llrbUpdater(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
-	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+
+	do := func() error {
+		llrbrw.RLock()
+		defer llrbrw.RUnlock()
+
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
 		setidx := rnd.Intn(1000000) % 4
@@ -196,6 +252,18 @@ func llrbUpdater(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 			fmsg := "llrbUpdated {%v items in %v} {%v items in %v} count:%v\n"
 			fmt.Printf(fmsg, markercount, x, nupdates, y, count)
 			now = time.Now()
+		}
+		// update the lmdb updater.
+		_, err := lmdbDoupdate(lmdbenv, lmdbdbi, key, value)
+		if err != nil {
+			panic(err)
+		}
+		return nil
+	}
+
+	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+		if err := do(); err != nil {
+			return
 		}
 		runtime.Gosched()
 	}
@@ -326,7 +394,10 @@ func vllrbdel(
 	return "ok"
 }
 
-func llrbDeleter(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
+func llrbDeleter(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
+	index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
+
 	defer wg.Done()
 
 	var ndeletes, xdeletes int64
@@ -337,7 +408,11 @@ func llrbDeleter(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	lsmmap := map[int]bool{0: true, 1: false}
-	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+
+	do := func() error {
+		llrbrw.RLock()
+		defer llrbrw.RUnlock()
+
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
 		//fmt.Printf("delete %q\n", key)
@@ -374,6 +449,18 @@ func llrbDeleter(index *llrb.LLRB, n, seedl, seedc int64, wg *sync.WaitGroup) {
 			fmsg := "llrbDeleted {%v items %v} {%v:%v items in %v} count:%v\n"
 			fmt.Printf(fmsg, markercount, x, ndeletes, xdeletes, y, count)
 			now = time.Now()
+		}
+
+		// update lmdb
+		if _, err := lmdbDodelete(lmdbenv, lmdbdbi, key, value); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+		if err := do(); err != nil {
+			return
 		}
 		runtime.Gosched()
 	}
@@ -468,15 +555,17 @@ loop:
 		ngets++
 		time.Sleep(10 * time.Microsecond)
 		key = g(key, atomic.LoadInt64(&ncreates))
-		ln := len(llrbgets)
-		value, _, del, _ = llrbgets[rnd.Intn(1000000)%ln](index, key, value)
+		get := llrbgets[(rnd.Intn(1000000) % len(llrbgets))]
+		value, _, del, _ = get(index, key, value)
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
+
 		} else if (int64(x) % 2) != delmod {
 			if del {
 				panic(fmt.Errorf("unexpected deleted"))
 			}
 			comparekeyvalue(key, value, options.vallen)
+
 		} else {
 			nmisses++
 		}

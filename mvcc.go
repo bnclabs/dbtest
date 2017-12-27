@@ -1,6 +1,7 @@
 package main
 
 import "io"
+import "os"
 import "fmt"
 import "sync"
 import "time"
@@ -10,10 +11,25 @@ import "runtime"
 import "sync/atomic"
 import "math/rand"
 
+import "github.com/prataprc/golog"
 import "github.com/prataprc/gostore/llrb"
 import "github.com/prataprc/gostore/api"
+import "github.com/bmatsuo/lmdb-go/lmdb"
 
 func testmvcc() error {
+	// LMDB instance
+	lmdbpath = makelmdbpath()
+	defer func() {
+		if err := os.RemoveAll(lmdbpath); err != nil {
+			log.Errorf("%v", err)
+		}
+	}()
+	lmdbenv, lmdbdbi, err := initlmdb(lmdb.NoSync | lmdb.NoMetaSync)
+	if err != nil {
+		return err
+	}
+	defer lmdbenv.Close()
+
 	setts := llrb.Defaultsettings()
 	index := llrb.NewMVCC("dbtest", setts)
 	defer index.Destroy()
@@ -23,18 +39,21 @@ func testmvcc() error {
 	if err := mvccLoad(index, seedl); err != nil {
 		return err
 	}
+	if err := lmdbLoad(lmdbenv, lmdbdbi, seedl); err != nil {
+		return err
+	}
 
 	var wwg, rwg sync.WaitGroup
 	fin := make(chan struct{})
 
-	go mvccvalidator(index, true /*log*/, &rwg, fin)
+	go mvccvalidator(lmdbenv, lmdbdbi, index, true /*log*/, &rwg, fin)
 	rwg.Add(1)
 
 	// writer routines
 	n := atomic.LoadInt64(&numentries)
-	go mvccCreater(index, n, seedc, &wwg)
-	go mvccUpdater(index, n, seedl, seedc, &wwg)
-	go mvccDeleter(index, n, seedl, seedc, &wwg)
+	go mvccCreater(lmdbenv, lmdbdbi, index, n, seedc, &wwg)
+	go mvccUpdater(lmdbenv, lmdbdbi, index, n, seedl, seedc, &wwg)
+	go mvccDeleter(lmdbenv, lmdbdbi, index, n, seedl, seedc, &wwg)
 	wwg.Add(3)
 	// reader routines
 	for i := 0; i < numcpus; i++ {
@@ -54,32 +73,39 @@ func testmvcc() error {
 	return nil
 }
 
+var mvccrw sync.RWMutex
+
 func mvccvalidator(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *llrb.MVCC, log bool, wg *sync.WaitGroup, fin chan struct{}) {
 
 	defer wg.Done()
 
-	validate := func() {
+	do := func() {
+		if log {
+			index.Log()
+		}
 		now := time.Now()
 		index.Validate()
-		fmt.Printf("Took %v to validate index\n", time.Since(now))
+		fmt.Printf("Took %v to validate index\n\n", time.Since(now))
+		func() {
+			mvccrw.Lock()
+			defer mvccrw.Unlock()
+			compareMvccLmdb(index, lmdbenv, lmdbdbi)
+		}()
 	}
+
+	defer do()
 
 	tick := time.NewTicker(10 * time.Second)
 	for {
 		<-tick.C
 		select {
 		case <-fin:
-			validate()
 			return
 		default:
 		}
-
-		if log {
-			index.Log()
-		}
-
-		validate()
+		do()
 	}
 }
 
@@ -101,7 +127,7 @@ func mvccLoad(index *llrb.MVCC, seedl int64) error {
 	atomic.AddInt64(&numentries, int64(options.load))
 	atomic.AddInt64(&totalwrites, int64(options.load))
 
-	fmt.Printf("Loaded %v items in %v\n", options.load, time.Since(now))
+	fmt.Printf("Loaded %v items in %v\n\n", options.load, time.Since(now))
 	return nil
 }
 
@@ -109,7 +135,10 @@ var mvccsets = []func(index *llrb.MVCC, k, v, ov []byte) (uint64, []byte){
 	mvccSet1, mvccSet2, mvccSet3, mvccSet4,
 }
 
-func mvccCreater(index *llrb.MVCC, n, seedc int64, wg *sync.WaitGroup) {
+func mvccCreater(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
+	index *llrb.MVCC, n, seedc int64, wg *sync.WaitGroup) {
+
 	defer wg.Done()
 
 	klen, vlen := int64(options.keylen), int64(options.vallen)
@@ -118,7 +147,11 @@ func mvccCreater(index *llrb.MVCC, n, seedc int64, wg *sync.WaitGroup) {
 	key, value := make([]byte, 16), make([]byte, 16)
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
-	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+
+	do := func() error {
+		mvccrw.RLock()
+		defer mvccrw.RUnlock()
+
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
 		setidx := rnd.Intn(1000000) % len(mvccsets)
@@ -141,6 +174,17 @@ func mvccCreater(index *llrb.MVCC, n, seedc int64, wg *sync.WaitGroup) {
 			fmsg := "mvccCreated {%v items in %v} {%v items in %v} count:%v\n"
 			fmt.Printf(fmsg, markercount, x, nc, y.Round(time.Second), count)
 			now = time.Now()
+		}
+		// update the lmdb object
+		if err := lmdbDocreate(lmdbenv, lmdbdbi, key, value); err != nil {
+			panic(err)
+		}
+		return nil
+	}
+
+	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+		if err := do(); err != nil {
+			return
 		}
 		runtime.Gosched()
 	}
@@ -169,7 +213,9 @@ func vmvccupdater(
 	return "ok"
 }
 
-func mvccUpdater(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
+func mvccUpdater(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
+	index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	var nupdates int64
@@ -179,7 +225,11 @@ func mvccUpdater(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
-	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+
+	do := func() error {
+		mvccrw.RLock()
+		defer mvccrw.RUnlock()
+
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
 		setidx := rnd.Intn(1000000) % len(mvccsets)
@@ -202,6 +252,18 @@ func mvccUpdater(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 			fmsg := "mvccUpdated {%v items in %v} {%v items in %v} count:%v\n"
 			fmt.Printf(fmsg, markercount, x, nupdates, y, count)
 			now = time.Now()
+		}
+		// update the lmdb updater.
+		_, err := lmdbDoupdate(lmdbenv, lmdbdbi, key, value)
+		if err != nil {
+			panic(err)
+		}
+		return nil
+	}
+
+	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+		if err := do(); err != nil {
+			return
 		}
 		runtime.Gosched()
 	}
@@ -338,7 +400,10 @@ func vmvccdel(
 	return "ok"
 }
 
-func mvccDeleter(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
+func mvccDeleter(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
+	index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
+
 	defer wg.Done()
 
 	var ndeletes, xdeletes int64
@@ -349,7 +414,11 @@ func mvccDeleter(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	lsm := options.lsm
-	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+
+	do := func() error {
+		mvccrw.RLock()
+		defer mvccrw.RUnlock()
+
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
 		//fmt.Printf("delete %q\n", key)
@@ -385,6 +454,18 @@ func mvccDeleter(index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
 			fmsg := "mvccDeleted {%v items in %v} {%v:%v items in %v} cnt:%v\n"
 			fmt.Printf(fmsg, markercount, x, ndeletes, xdeletes, y, count)
 			now = time.Now()
+		}
+
+		// update lmdb
+		if _, err := lmdbDodelete(lmdbenv, lmdbdbi, key, value); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+		if err := do(); err != nil {
+			return
 		}
 		runtime.Gosched()
 	}
