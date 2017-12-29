@@ -12,6 +12,7 @@ import "sync/atomic"
 import "math/rand"
 
 import "github.com/prataprc/golog"
+import s "github.com/prataprc/gosettings"
 import "github.com/prataprc/gostore/llrb"
 import "github.com/prataprc/gostore/api"
 import "github.com/bmatsuo/lmdb-go/lmdb"
@@ -39,6 +40,7 @@ func testmvcc() error {
 	if err := mvccLoad(index, seedl); err != nil {
 		return err
 	}
+	seqno = 0
 	if err := lmdbLoad(lmdbenv, lmdbdbi, seedl); err != nil {
 		return err
 	}
@@ -46,7 +48,7 @@ func testmvcc() error {
 	var wwg, rwg sync.WaitGroup
 	fin := make(chan struct{})
 
-	go mvccvalidator(lmdbenv, lmdbdbi, index, true /*log*/, &rwg, fin)
+	go mvccvalidator(lmdbenv, lmdbdbi, index, true /*log*/, &rwg, fin, setts)
 	rwg.Add(1)
 
 	// writer routines
@@ -77,27 +79,38 @@ var mvccrw sync.RWMutex
 
 func mvccvalidator(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
-	index *llrb.MVCC, log bool, wg *sync.WaitGroup, fin chan struct{}) {
+	index *llrb.MVCC, log bool, wg *sync.WaitGroup, fin chan struct{},
+	mvccsetts s.Settings) {
 
 	defer wg.Done()
+
+	pausetm := time.Duration(mvccsetts.Int64("snapshottick")) * time.Millisecond
 
 	do := func() {
 		if log {
 			index.Log()
 		}
 		now := time.Now()
-		index.Validate()
+		//index.Validate()
 		fmt.Printf("Took %v to validate index\n\n", time.Since(now))
 		func() {
 			mvccrw.Lock()
 			defer mvccrw.Unlock()
+
+			time.Sleep(pausetm * 50)
 			compareMvccLmdb(index, lmdbenv, lmdbdbi)
 		}()
 	}
 
-	defer do()
+	defer func() {
+		if r := recover(); r == nil {
+			do()
+		} else {
+			panic(r)
+		}
+	}()
 
-	tick := time.NewTicker(10 * time.Second)
+	tick := time.NewTicker(5 * time.Second)
 	for {
 		<-tick.C
 		select {
@@ -116,18 +129,19 @@ func mvccLoad(index *llrb.MVCC, seedl int64) error {
 	now, oldvalue := time.Now(), make([]byte, 16)
 	opaque := atomic.AddUint64(&seqno, 1)
 	key, value := g(make([]byte, 16), make([]byte, 16), opaque)
-	for ; key != nil; key, value = g(key, value, opaque) {
+	for key != nil {
 		//fmt.Printf("load %q\n", key)
 		oldvalue, _ := index.Set(key, value, oldvalue)
 		if len(oldvalue) > 0 {
 			panic(fmt.Errorf("unexpected %q", oldvalue))
 		}
 		opaque = atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 	}
 	atomic.AddInt64(&numentries, int64(options.load))
 	atomic.AddInt64(&totalwrites, int64(options.load))
 
-	fmt.Printf("Loaded %v items in %v\n\n", options.load, time.Since(now))
+	fmt.Printf("Loaded MVCC %v items in %v\n\n", options.load, time.Since(now))
 	return nil
 }
 
@@ -612,6 +626,8 @@ loop:
 			fmt.Printf(fmsg, markercount, x, ngets, nmisses, y)
 			now = time.Now()
 		}
+
+		runtime.Gosched()
 	}
 	duration := time.Since(epoch)
 	<-fin

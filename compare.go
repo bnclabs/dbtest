@@ -41,8 +41,13 @@ func compareLlrbLmdb(
 				fmsg := "expected %q, got %q"
 				panic(fmt.Errorf(fmsg, lmdbkey, llrbkey))
 			} else if bytes.Compare(llrbval, lmdbval) != 0 {
-				fmsg := "for %q expected %q, got %q"
-				panic(fmt.Errorf(fmsg, llrbkey, lmdbval, llrbval))
+				fmsg := "for %q expected val %q, got val %q\n"
+				x, y := lmdbval[:options.vallen], llrbval[:options.vallen]
+				fmt.Printf(fmsg, llrbkey, x, y)
+				fmsg = "for %q expected seqno %v, got %v\n"
+				x, y = lmdbval[options.vallen:], llrbval[options.vallen:]
+				fmt.Printf(fmsg, llrbkey, lmdbval, llrbval)
+				panic("error")
 			}
 			//fmt.Printf("compareLlrbLmdb %q okay ...\n", llrbkey)
 
@@ -58,7 +63,7 @@ func compareLlrbLmdb(
 	}
 
 	took := time.Since(epoch)
-	fmt.Printf("Took %v to compare (%v) LLRB and LMDB\n\n", cmpcount, took)
+	fmt.Printf("Took %v to compare (%v) LLRB and LMDB\n\n", took, cmpcount)
 }
 
 func compareMvccLmdb(
@@ -71,6 +76,7 @@ func compareMvccLmdb(
 
 	epoch, cmpcount := time.Now(), 0
 
+	//fmt.Println("mvcc seqno", index.Getseqno())
 	iter := index.Scan()
 	err := lmdbenv.View(func(txn *lmdb.Txn) error {
 		lmdbs := lmdbscan.New(txn, lmdbdbi)
@@ -111,5 +117,5 @@ func compareMvccLmdb(
 	}
 
 	took := time.Since(epoch)
-	fmt.Printf("Took %v to compare (%v) MVCC and LMDB\n\n", cmpcount, took)
+	fmt.Printf("Took %v to compare (%v) MVCC and LMDB\n\n", took, cmpcount)
 }

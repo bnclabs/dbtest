@@ -151,19 +151,20 @@ func lmdbLoad(env *lmdb.Env, dbi lmdb.DBI, seedl int64) error {
 	now := time.Now()
 
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	opaque := atomic.AddUint64(&seqno, 1)
 	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
 
 	populate := func(txn *lmdb.Txn) (err error) {
+		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
 		//if "00000000000000000000000000699067" == string(key) {
 		//	fmt.Println("load", string(key))
 		//}
-		for ; key != nil; key, value = g(key, value, opaque) {
-			opaque = atomic.AddUint64(&seqno, 1)
+		for key != nil {
 			if err := txn.Put(dbi, key, value, 0); err != nil {
 				return err
 			}
+			opaque = atomic.AddUint64(&seqno, 1)
+			key, value = g(key, value, opaque)
 		}
 		return nil
 	}
@@ -174,7 +175,7 @@ func lmdbLoad(env *lmdb.Env, dbi lmdb.DBI, seedl int64) error {
 	atomic.AddInt64(&numentries, int64(options.load))
 	atomic.AddInt64(&totalwrites, int64(options.load))
 
-	fmt.Printf("Loaded %v items in %v\n", options.load, time.Since(now))
+	fmt.Printf("Loaded LMDB %v items in %v\n\n", options.load, time.Since(now))
 	return nil
 }
 

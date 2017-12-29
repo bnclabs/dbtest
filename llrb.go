@@ -39,6 +39,7 @@ func testllrb() error {
 	if err := llrbLoad(index, seedl); err != nil {
 		return err
 	}
+	seqno = 0
 	if err = lmdbLoad(lmdbenv, lmdbdbi, seedl); err != nil {
 		return err
 	}
@@ -94,7 +95,13 @@ func llrbvalidator(
 		}()
 	}
 
-	defer do()
+	defer func() {
+		if r := recover(); r == nil {
+			do()
+		} else {
+			panic(r)
+		}
+	}()
 
 	tick := time.NewTicker(10 * time.Second)
 	for {
@@ -127,7 +134,7 @@ func llrbLoad(index *llrb.LLRB, seedl int64) error {
 	atomic.AddInt64(&numentries, int64(options.load))
 	atomic.AddInt64(&totalwrites, int64(options.load))
 
-	fmt.Printf("Loaded %v items in %v\n\n", options.load, time.Since(now))
+	fmt.Printf("Loaded LLRB %v items in %v\n\n", options.load, time.Since(now))
 	return nil
 }
 
@@ -553,7 +560,6 @@ func llrbGetter(
 loop:
 	for {
 		ngets++
-		time.Sleep(10 * time.Microsecond)
 		key = g(key, atomic.LoadInt64(&ncreates))
 		get := llrbgets[(rnd.Intn(1000000) % len(llrbgets))]
 		value, _, del, _ = get(index, key, value)
@@ -581,6 +587,8 @@ loop:
 			fmsg := "llrbGetter {%v items in %v} {%v:%v items in %v}\n"
 			fmt.Printf(fmsg, markercount, x, ngets, nmisses, y)
 		}
+
+		runtime.Gosched()
 	}
 	duration := time.Since(epoch)
 	<-fin
@@ -660,7 +668,6 @@ func llrbRanger(
 	epoch, value := time.Now(), make([]byte, 16)
 loop:
 	for {
-		time.Sleep(10 * time.Microsecond)
 		key = g(key, atomic.LoadInt64(&ncreates))
 		ln := len(llrbrngs)
 		n := llrbrngs[rnd.Intn(1000000)%ln](index, key, value)
@@ -670,6 +677,7 @@ loop:
 			break loop
 		default:
 		}
+		runtime.Gosched()
 	}
 	duration := time.Since(epoch)
 	<-fin

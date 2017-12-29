@@ -109,7 +109,7 @@ func bognLoad(index *bogn.Bogn, seedl int64) error {
 	atomic.AddInt64(&numentries, int64(options.load))
 	atomic.AddInt64(&totalwrites, int64(options.load))
 
-	fmt.Printf("Loaded %v items in %v\n", options.load, time.Since(now))
+	fmt.Printf("Loaded BOGN %v items in %v\n", options.load, time.Since(now))
 	return nil
 }
 
