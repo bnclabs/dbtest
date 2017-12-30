@@ -28,7 +28,10 @@ var options struct {
 
 func optparse(args []string) {
 	f := flag.NewFlagSet("dbperf", flag.ExitOnError)
-	cpu := runtime.GOMAXPROCS(-1)
+	cpu := (runtime.GOMAXPROCS(-1) / 2) - 1
+	if cpu <= 0 {
+		cpu = 2
+	}
 
 	f.StringVar(&options.db, "db", "llrb", "lmdb|llrb|mvcc|bubt|bogn store type")
 	f.IntVar(&options.cpu, "cpu", cpu, "lmdb|llrb|mvcc|bubt|bogn store type")

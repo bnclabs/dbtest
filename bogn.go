@@ -1,24 +1,42 @@
 package main
 
 import "io"
+import "os"
 import "fmt"
 import "sync"
 import "time"
 import "bytes"
+import "strings"
 import "runtime"
 import "strconv"
 import "sync/atomic"
 import "math/rand"
 
+import s "github.com/prataprc/gosettings"
+import "github.com/prataprc/golog"
 import "github.com/prataprc/gostore/api"
 import "github.com/prataprc/gostore/bogn"
-import s "github.com/prataprc/gosettings"
+import "github.com/bmatsuo/lmdb-go/lmdb"
 
 func testbogn() error {
-	setts := bognsettings(options.seed)
-	bogn.PurgeIndex("dbtest", setts)
+	// LMDB instance
+	lmdbpath = makelmdbpath()
+	defer func() {
+		if err := os.RemoveAll(lmdbpath); err != nil {
+			log.Errorf("%v", err)
+		}
+	}()
+	lmdbenv, lmdbdbi, err := initlmdb(lmdb.NoSync | lmdb.NoMetaSync)
+	if err != nil {
+		return err
+	}
+	defer lmdbenv.Close()
 
-	index, err := bogn.New("dbtest", setts)
+	// Bogn instance
+	bognsetts := bognsettings(options.seed)
+	bogn.PurgeIndex("dbtest", bognsetts)
+
+	index, err := bogn.New("dbtest", bognsetts)
 	if err != nil {
 		panic(err)
 	}
@@ -27,27 +45,31 @@ func testbogn() error {
 	index.Start()
 
 	seedl, seedc := int64(options.seed), int64(options.seed)+100
-	fmt.Printf("Seed for load: %v, for ops: %v\n", seedl, seedc)
+	fmt.Printf("Seed for load: %v, for ops: %v\n\n", seedl, seedc)
 	if err := bognLoad(index, seedl); err != nil {
+		return err
+	}
+	seqno = 0
+	if err := lmdbLoad(lmdbenv, lmdbdbi, seedl); err != nil {
 		return err
 	}
 
 	var wwg, rwg sync.WaitGroup
 	fin := make(chan struct{})
 
-	go bognvalidator(index, true /*log*/, &rwg, fin)
+	go bognvalidator(lmdbenv, lmdbdbi, index, true, &rwg, fin, bognsetts)
 	rwg.Add(1)
 
 	// writer routines
 	n := atomic.LoadInt64(&numentries)
-	go bognCreater(index, n, seedc, &wwg)
-	go bognUpdater(index, n, seedl, seedc, &wwg)
-	go bognDeleter(index, n, seedl, seedc, &wwg)
+	go bognCreater(lmdbenv, lmdbdbi, index, n, seedc, &wwg)
+	go bognUpdater(lmdbenv, lmdbdbi, index, n, seedl, seedc, &wwg)
+	go bognDeleter(lmdbenv, lmdbdbi, index, n, seedl, seedc, &wwg)
 	wwg.Add(3)
 
 	// reader routines
-	for i := 0; i < 4; i++ { // options.cpu; i++ {
-		go bognGetter(index, n, seedl, seedc, fin, &rwg)
+	for i := 0; i < options.cpu; i++ {
+		go bognGetter(lmdbenv, lmdbdbi, index, n, seedl, seedc, fin, &rwg)
 		go bognRanger(index, n, seedl, seedc, fin, &rwg)
 		rwg.Add(2)
 	}
@@ -58,6 +80,11 @@ func testbogn() error {
 	index.Log()
 	index.Validate()
 
+	pausetm := time.Duration(bognsetts.Int64("llrb.snapshottick"))
+	pausetm *= time.Millisecond
+	time.Sleep((pausetm * 1000) % 1000)
+	diskBognLmdb("dbtest", bognsetts)
+
 	fmt.Printf("Number of ROLLBACKS: %v\n", rollbacks)
 	fmt.Printf("Number of conflicts: %v\n", conflicts)
 	//count, n := index.Count(), atomic.LoadInt64(&numentries)
@@ -66,28 +93,43 @@ func testbogn() error {
 	return nil
 }
 
+var bognrw sync.RWMutex
+
 func bognvalidator(
-	index *bogn.Bogn, log bool, wg *sync.WaitGroup, fin chan struct{}) {
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
+	index *bogn.Bogn, log bool, wg *sync.WaitGroup, fin chan struct{},
+	bognsetts s.Settings) {
 
 	defer wg.Done()
 
+	pausetm := time.Duration(bognsetts.Int64("llrb.snapshottick"))
+	pausetm *= time.Millisecond
+
+	do := func() {
+		if log {
+			index.Log()
+		}
+		now := time.Now()
+		index.Validate()
+		fmt.Printf("Took %v to validate index\n\n", time.Since(now))
+		func() {
+			bognrw.Lock()
+			defer bognrw.Unlock()
+
+			time.Sleep((pausetm * 1000) % 1000)
+			compareBognLmdb(index, lmdbenv, lmdbdbi)
+		}()
+	}
+
 	tick := time.NewTicker(10 * time.Second)
-loop:
 	for {
 		<-tick.C
 		select {
 		case <-fin:
+			return
 		default:
-			break loop
 		}
-
-		if log {
-			index.Log()
-		}
-
-		now := time.Now()
-		index.Validate()
-		fmt.Printf("Took %v to validate index\n", time.Since(now))
+		do()
 	}
 }
 
@@ -98,18 +140,19 @@ func bognLoad(index *bogn.Bogn, seedl int64) error {
 	now, oldvalue := time.Now(), make([]byte, 16)
 	opaque := atomic.AddUint64(&seqno, 1)
 	key, value := g(make([]byte, 16), make([]byte, 16), opaque)
-	for ; key != nil; key, value = g(key, value, opaque) {
+	for key != nil {
 		//fmt.Printf("load %q\n", key)
 		oldvalue, _ := index.Set(key, value, oldvalue)
 		if len(oldvalue) > 0 {
 			panic(fmt.Errorf("unexpected %q", oldvalue))
 		}
 		opaque = atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 	}
 	atomic.AddInt64(&numentries, int64(options.load))
 	atomic.AddInt64(&totalwrites, int64(options.load))
 
-	fmt.Printf("Loaded BOGN %v items in %v\n", options.load, time.Since(now))
+	fmt.Printf("Loaded BOGN %v items in %v\n\n", options.load, time.Since(now))
 	return nil
 }
 
@@ -117,7 +160,9 @@ var bognsets = []func(index *bogn.Bogn, key, val, ov []byte) (uint64, []byte){
 	bognSet1, bognSet2, bognSet3, bognSet4,
 }
 
-func bognCreater(index *bogn.Bogn, n, seedc int64, wg *sync.WaitGroup) {
+func bognCreater(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
+	index *bogn.Bogn, n, seedc int64, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	klen, vlen := int64(options.keylen), int64(options.vallen)
@@ -126,7 +171,11 @@ func bognCreater(index *bogn.Bogn, n, seedc int64, wg *sync.WaitGroup) {
 	key, value := make([]byte, 16), make([]byte, 16)
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
-	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+
+	do := func() error {
+		bognrw.RLock()
+		defer bognrw.RUnlock()
+
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
 		setidx := rnd.Intn(1000000) % len(bognsets)
@@ -148,6 +197,17 @@ func bognCreater(index *bogn.Bogn, n, seedc int64, wg *sync.WaitGroup) {
 			fmsg := "bognCreated {%v items in %v} {%v items in %v}\n"
 			fmt.Printf(fmsg, markercount, x, nc, y.Round(time.Second))
 			now = time.Now()
+		}
+		// update the lmdb object
+		if err := lmdbDocreate(lmdbenv, lmdbdbi, key, value); err != nil {
+			panic(err)
+		}
+		return nil
+	}
+
+	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+		if err := do(); err != nil {
+			return
 		}
 		runtime.Gosched()
 	}
@@ -176,7 +236,10 @@ func vbognupdater(
 	return "ok"
 }
 
-func bognUpdater(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
+func bognUpdater(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
+	index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
+
 	defer wg.Done()
 
 	var nupdates int64
@@ -186,7 +249,11 @@ func bognUpdater(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
-	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+
+	do := func() error {
+		bognrw.RLock()
+		defer bognrw.RUnlock()
+
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
 		setidx := rnd.Intn(1000000) % len(bognsets)
@@ -204,6 +271,18 @@ func bognUpdater(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 			fmsg := "bognUpdated {%v items in %v} {%v items in %v}\n"
 			fmt.Printf(fmsg, markercount, x, nupdates, y.Round(time.Second))
 			now = time.Now()
+		}
+		// update the lmdb updater.
+		_, err := lmdbDoupdate(lmdbenv, lmdbdbi, key, value)
+		if err != nil {
+			panic(err)
+		}
+		return nil
+	}
+
+	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+		if err := do(); err != nil {
+			return
 		}
 		runtime.Gosched()
 	}
@@ -347,7 +426,10 @@ func vbogndel(
 	return "ok"
 }
 
-func bognDeleter(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
+func bognDeleter(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
+	index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
+
 	defer wg.Done()
 
 	var ndeletes, xdeletes int64
@@ -358,7 +440,11 @@ func bognDeleter(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
 	lsm := options.lsm
-	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+
+	do := func() error {
+		bognrw.RLock()
+		defer bognrw.RUnlock()
+
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
 		//fmt.Printf("delete %q\n", key)
@@ -393,6 +479,18 @@ func bognDeleter(index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 			fmsg := "bognDeleted {%v items in %v} {%v:%v items in %v}\n"
 			fmt.Printf(fmsg, markercount, x, ndeletes, xdeletes, y)
 			now = time.Now()
+		}
+
+		// update lmdb
+		if _, err := lmdbDodelete(lmdbenv, lmdbdbi, key, value); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+		if err := do(); err != nil {
+			return
 		}
 		runtime.Gosched()
 	}
@@ -491,11 +589,12 @@ func bognDel4(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	return 0, ok
 }
 
-var bogngets = []func(x *bogn.Bogn, k, v []byte) ([]byte, uint64, bool, bool){
+var bogngets = []func(e *lmdb.Env, dbi lmdb.DBI, x *bogn.Bogn, k, v []byte) ([]byte, uint64, bool, bool){
 	bognGet1, bognGet2, bognGet3,
 }
 
 func bognGetter(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *bogn.Bogn, n, seedl, seedc int64,
 	fin chan struct{}, wg *sync.WaitGroup) {
 
@@ -513,8 +612,8 @@ loop:
 	for {
 		ngets++
 		key = g(key, atomic.LoadInt64(&ncreates))
-		ln := len(bogngets)
-		value, _, del, _ = bogngets[rnd.Intn(1000000)%ln](index, key, value)
+		get := bogngets[rnd.Intn(1000000)%len(bogngets)]
+		value, _, del, _ = get(lmdbenv, lmdbdbi, index, key, value)
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
 		} else if (int64(x) % 2) != delmod {
@@ -545,22 +644,75 @@ loop:
 	fmt.Printf(fmsg, ngets, nmisses, duration)
 }
 
+func trylmdbget(lmdbenv *lmdb.Env, repeat int, get func(*lmdb.Txn) error) {
+	for i := 0; i < repeat; i++ {
+		if err := lmdbenv.View(get); err == nil {
+			break
+
+		} else if strings.Contains(err.Error(), "retry") {
+			if i == (repeat - 1) {
+				panic(err)
+			}
+
+		} else {
+			panic(err)
+		}
+		runtime.Gosched()
+	}
+}
+
 func bognGet1(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *bogn.Bogn, key, value []byte) ([]byte, uint64, bool, bool) {
 
 	//fmt.Printf("bognGet1 %q\n", key)
 	//defer fmt.Printf("bognGet1-abort %q\n", key)
-	return index.Get(key, value)
+
+	bognval, seqno, del, ok := index.Get(key, value)
+	//return bognval, seqno, del, ok
+
+	get := func(txn *lmdb.Txn) (err error) {
+		lmdbval, err := txn.Get(lmdbdbi, key)
+		if del == false && options.vallen > 0 {
+			if bytes.Compare(bognval, lmdbval) != 0 {
+				fmsg := "retry: expected %q, got %q"
+				return fmt.Errorf(fmsg, lmdbval, bognval)
+			}
+		}
+		return nil
+	}
+	trylmdbget(lmdbenv, 5000, get)
+
+	return bognval, seqno, del, ok
 }
 
 func bognGet2(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *bogn.Bogn, key, value []byte) ([]byte, uint64, bool, bool) {
 
+	var bognval []byte
+	var del, ok bool
+	var bogntxn api.Transactor
+
 	//fmt.Printf("bognGet2\n")
-	txn := index.BeginTxn(0xC0FFEE)
-	value, _, del, ok := txn.Get(key, value)
+	get := func(txn *lmdb.Txn) (err error) {
+		bogntxn = index.BeginTxn(0xC0FFEE)
+		bognval, _, del, ok = bogntxn.Get(key, value)
+
+		lmdbval, err := txn.Get(lmdbdbi, key)
+		if del == false && options.vallen > 0 {
+			if bytes.Compare(bognval, lmdbval) != 0 {
+				bogntxn.Abort()
+				fmsg := "retry: expected %q, got %q"
+				return fmt.Errorf(fmsg, lmdbval, bognval)
+			}
+		}
+		return nil
+	}
+	trylmdbget(lmdbenv, 5000, get)
+
 	if ok == true {
-		cur, err := txn.OpenCursor(key)
+		cur, err := bogntxn.OpenCursor(key)
 		if err != nil {
 			panic(err)
 		}
@@ -568,20 +720,40 @@ func bognGet2(
 			panic(fmt.Errorf("expected %v, got %v", del, cdel))
 		} else if bytes.Compare(ckey, key) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, ckey))
-		} else if cvalue := cur.Value(); bytes.Compare(cvalue, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", value, cvalue))
+		} else if cvalue := cur.Value(); bytes.Compare(cvalue, bognval) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", bognval, cvalue))
 		}
 	}
 	//fmt.Printf("bognGet2-abort\n")
-	txn.Abort()
-	return value, 0, del, ok
+	bogntxn.Abort()
+
+	return bognval, 0, del, ok
 }
 
 func bognGet3(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *bogn.Bogn, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	view := index.View(0x1235)
-	value, _, del, ok := view.Get(key, value)
+	var bognval []byte
+	var del, ok bool
+	var view api.Transactor
+
+	get := func(txn *lmdb.Txn) (err error) {
+		view = index.View(0x1235)
+		bognval, _, del, ok = view.Get(key, value)
+
+		lmdbval, err := txn.Get(lmdbdbi, key)
+		if del == false && options.vallen > 0 {
+			if bytes.Compare(bognval, lmdbval) != 0 {
+				view.Abort()
+				fmsg := "retry: expected %q, got %q"
+				return fmt.Errorf(fmsg, lmdbval, bognval)
+			}
+		}
+		return nil
+	}
+	trylmdbget(lmdbenv, 5000, get)
+
 	if ok == true {
 		cur, err := view.OpenCursor(key)
 		if err != nil {
@@ -591,12 +763,13 @@ func bognGet3(
 			panic(fmt.Errorf("expected %v, got %v", del, cdel))
 		} else if bytes.Compare(ckey, key) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, ckey))
-		} else if cvalue := cur.Value(); bytes.Compare(cvalue, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", value, cvalue))
+		} else if cvalue := cur.Value(); bytes.Compare(cvalue, bognval) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", bognval, cvalue))
 		}
 	}
 	view.Abort()
-	return value, 0, del, ok
+
+	return bognval, 0, del, ok
 }
 
 var bognrngs = []func(index *bogn.Bogn, key, val []byte) int64{

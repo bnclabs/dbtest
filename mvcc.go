@@ -67,6 +67,9 @@ func testmvcc() error {
 	close(fin)
 	rwg.Wait()
 
+	index.Log()
+	index.Validate()
+
 	fmt.Printf("Number of ROLLBACKS: %v\n", rollbacks)
 	fmt.Printf("Number of conflicts: %v\n", conflicts)
 	count, n := index.Count(), atomic.LoadInt64(&numentries)
@@ -110,7 +113,7 @@ func mvccvalidator(
 		}
 	}()
 
-	tick := time.NewTicker(5 * time.Second)
+	tick := time.NewTicker(10 * time.Second)
 	for {
 		<-tick.C
 		select {
