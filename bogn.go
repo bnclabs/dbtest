@@ -80,9 +80,7 @@ func testbogn() error {
 	index.Log()
 	index.Validate()
 
-	pausetm := time.Duration(bognsetts.Int64("llrb.snapshottick"))
-	pausetm *= time.Millisecond
-	time.Sleep((pausetm * 1000) % 1000)
+	syncsleep(bognsetts)
 	diskBognLmdb("dbtest", bognsetts)
 
 	fmt.Printf("Number of ROLLBACKS: %v\n", rollbacks)
@@ -102,21 +100,20 @@ func bognvalidator(
 
 	defer wg.Done()
 
-	pausetm := time.Duration(bognsetts.Int64("llrb.snapshottick"))
-	pausetm *= time.Millisecond
-
 	do := func() {
 		if log {
 			index.Log()
 		}
+
 		now := time.Now()
 		index.Validate()
 		fmt.Printf("Took %v to validate index\n\n", time.Since(now))
+
 		func() {
 			bognrw.Lock()
 			defer bognrw.Unlock()
 
-			time.Sleep((pausetm * 1000) % 1000)
+			syncsleep(bognsetts)
 			compareBognLmdb(index, lmdbenv, lmdbdbi)
 		}()
 	}
@@ -644,7 +641,10 @@ loop:
 	fmt.Printf(fmsg, ngets, nmisses, duration)
 }
 
-func trylmdbget(lmdbenv *lmdb.Env, repeat int, get func(*lmdb.Txn) error) {
+func trylmdbget(
+	lmdbenv *lmdb.Env,
+	index *bogn.Bogn, repeat int, get func(*lmdb.Txn) error) {
+
 	for i := 0; i < repeat; i++ {
 		if err := lmdbenv.View(get); err == nil {
 			break
@@ -657,6 +657,7 @@ func trylmdbget(lmdbenv *lmdb.Env, repeat int, get func(*lmdb.Txn) error) {
 		} else {
 			panic(err)
 		}
+		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
 		runtime.Gosched()
 	}
 }
@@ -681,7 +682,7 @@ func bognGet1(
 		}
 		return nil
 	}
-	trylmdbget(lmdbenv, 5000, get)
+	trylmdbget(lmdbenv, index, 5000, get)
 
 	return bognval, seqno, del, ok
 }
@@ -709,7 +710,7 @@ func bognGet2(
 		}
 		return nil
 	}
-	trylmdbget(lmdbenv, 5000, get)
+	trylmdbget(lmdbenv, index, 5000, get)
 
 	if ok == true {
 		cur, err := bogntxn.OpenCursor(key)
@@ -752,7 +753,7 @@ func bognGet3(
 		}
 		return nil
 	}
-	trylmdbget(lmdbenv, 5000, get)
+	trylmdbget(lmdbenv, index, 5000, get)
 
 	if ok == true {
 		cur, err := view.OpenCursor(key)
@@ -948,4 +949,12 @@ func bognsettings(seed int) s.Settings {
 	fmt.Printf("bubt diskpaths:%v msize:%v zsize:%v mmap:%v\n", a, b, c, d)
 
 	return setts
+}
+
+func syncsleep(bognsetts s.Settings) {
+	pausetm := time.Duration(bognsetts.Int64("llrb.snapshottick"))
+	if pausetm *= 1000; pausetm > 1000 {
+		pausetm = 1000
+	}
+	time.Sleep(pausetm * time.Millisecond)
 }
