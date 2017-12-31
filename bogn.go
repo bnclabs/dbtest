@@ -19,30 +19,40 @@ import "github.com/prataprc/gostore/bogn"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 
 func testbogn() error {
-	// LMDB instance
-	lmdbpath = makelmdbpath()
+	bognsetts := bognsettings(options.seed)
+	lmdbpath := makelmdbpath()
 	defer func() {
 		if err := os.RemoveAll(lmdbpath); err != nil {
 			log.Errorf("%v", err)
 		}
 	}()
-	lmdbenv, lmdbdbi, err := initlmdb(lmdb.NoSync | lmdb.NoMetaSync)
+
+	if err := dobogntest(bognsetts, lmdbpath); err != nil {
+		return err
+	}
+	syncsleep(bognsetts)
+	diskBognLmdb("dbtest", lmdbpath, bognsetts)
+
+	return nil
+}
+
+func dobogntest(bognsetts s.Settings, lmdbpath string) error {
+	// LMDB instance
+	lmdbenv, lmdbdbi, err := initlmdb(lmdbpath, lmdb.NoSync|lmdb.NoMetaSync)
 	if err != nil {
 		return err
 	}
 	defer lmdbenv.Close()
 
 	// Bogn instance
-	bognsetts := bognsettings(options.seed)
 	bogn.PurgeIndex("dbtest", bognsetts)
 
 	index, err := bogn.New("dbtest", bognsetts)
 	if err != nil {
 		panic(err)
 	}
-	defer index.Destroy()
-	defer index.Close()
 	index.Start()
+	defer index.Close()
 
 	seedl, seedc := int64(options.seed), int64(options.seed)+100
 	fmt.Printf("Seed for load: %v, for ops: %v\n\n", seedl, seedc)
@@ -50,6 +60,7 @@ func testbogn() error {
 		return err
 	}
 	seqno = 0
+	atomic.StoreInt64(&totalwrites, 0)
 	if err := lmdbLoad(lmdbenv, lmdbdbi, seedl); err != nil {
 		return err
 	}
@@ -80,14 +91,11 @@ func testbogn() error {
 	index.Log()
 	index.Validate()
 
-	syncsleep(bognsetts)
-	diskBognLmdb("dbtest", bognsetts)
-
 	fmt.Printf("Number of ROLLBACKS: %v\n", rollbacks)
 	fmt.Printf("Number of conflicts: %v\n", conflicts)
+
 	//count, n := index.Count(), atomic.LoadInt64(&numentries)
 	//fmt.Printf("BOGN total indexed %v items, expected %v\n", count, n)
-
 	return nil
 }
 
@@ -906,6 +914,14 @@ func bognRange4(index *bogn.Bogn, key, value []byte) (n int64) {
 	return
 }
 
+func syncsleep(bognsetts s.Settings) {
+	pausetm := time.Duration(bognsetts.Int64("llrb.snapshottick"))
+	if pausetm *= 1000; pausetm > 1000 {
+		pausetm = 1000
+	}
+	time.Sleep(pausetm * time.Millisecond)
+}
+
 func bognsettings(seed int) s.Settings {
 	rnd := rand.New(rand.NewSource(int64(seed)))
 	setts := bogn.Defaultsettings()
@@ -916,7 +932,7 @@ func bognsettings(seed int) s.Settings {
 	setts["bubt.mmap"] = []bool{true, false}[rnd.Intn(10000)%2]
 	setts["bubt.msize"] = []int64{4096, 8192, 12288}[rnd.Intn(10000)%3]
 	setts["bubt.zsize"] = []int64{4096, 8192, 12288}[rnd.Intn(10000)%3]
-	//setts["llrb.memcapacity"] = 10 * 1024 * 1024 * 1024
+	setts["llrb.memcapacity"] = options.capacity
 	setts["llrb.allocator"] = "flist"
 	setts["llrb.snapshottick"] = []int64{4, 8, 16, 32}[rnd.Intn(10000)%4]
 	switch options.bogn {
@@ -949,12 +965,4 @@ func bognsettings(seed int) s.Settings {
 	fmt.Printf("bubt diskpaths:%v msize:%v zsize:%v mmap:%v\n", a, b, c, d)
 
 	return setts
-}
-
-func syncsleep(bognsetts s.Settings) {
-	pausetm := time.Duration(bognsetts.Int64("llrb.snapshottick"))
-	if pausetm *= 1000; pausetm > 1000 {
-		pausetm = 1000
-	}
-	time.Sleep(pausetm * time.Millisecond)
 }

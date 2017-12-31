@@ -18,13 +18,13 @@ import "github.com/bmatsuo/lmdb-go/lmdb"
 
 func testllrb() error {
 	// LMDB instance
-	lmdbpath = makelmdbpath()
+	lmdbpath := makelmdbpath()
 	defer func() {
 		if err := os.RemoveAll(lmdbpath); err != nil {
 			log.Errorf("%v", err)
 		}
 	}()
-	lmdbenv, lmdbdbi, err := initlmdb(lmdb.NoSync | lmdb.NoMetaSync)
+	lmdbenv, lmdbdbi, err := initlmdb(lmdbpath, lmdb.NoSync|lmdb.NoMetaSync)
 	if err != nil {
 		return err
 	}

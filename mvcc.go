@@ -19,13 +19,13 @@ import "github.com/bmatsuo/lmdb-go/lmdb"
 
 func testmvcc() error {
 	// LMDB instance
-	lmdbpath = makelmdbpath()
+	lmdbpath := makelmdbpath()
 	defer func() {
 		if err := os.RemoveAll(lmdbpath); err != nil {
 			log.Errorf("%v", err)
 		}
 	}()
-	lmdbenv, lmdbdbi, err := initlmdb(lmdb.NoSync | lmdb.NoMetaSync)
+	lmdbenv, lmdbdbi, err := initlmdb(lmdbpath, lmdb.NoSync|lmdb.NoMetaSync)
 	if err != nil {
 		return err
 	}
@@ -41,6 +41,7 @@ func testmvcc() error {
 		return err
 	}
 	seqno = 0
+	atomic.StoreInt64(&totalwrites, 0)
 	if err := lmdbLoad(lmdbenv, lmdbdbi, seedl); err != nil {
 		return err
 	}

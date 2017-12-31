@@ -13,17 +13,15 @@ import "math/rand"
 import "github.com/prataprc/golog"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 
-var lmdbpath string
-
 func testlmdb() error {
-	lmdbpath = makelmdbpath()
+	lmdbpath := makelmdbpath()
 	defer func() {
 		if err := os.RemoveAll(lmdbpath); err != nil {
 			log.Errorf("%v", err)
 		}
 	}()
 
-	env, dbi, err := initlmdb(lmdb.NoSync | lmdb.NoMetaSync)
+	env, dbi, err := initlmdb(lmdbpath, lmdb.NoSync|lmdb.NoMetaSync)
 	if err != nil {
 		return err
 	}
@@ -45,8 +43,8 @@ func testlmdb() error {
 	// reader routines
 	fin := make(chan struct{})
 	for i := 0; i < options.cpu; i++ {
-		go lmdbGetter(n, seedl, seedc, fin, &rwg)
-		go lmdbRanger(n, seedl, seedc, fin, &rwg)
+		go lmdbGetter(lmdbpath, n, seedl, seedc, fin, &rwg)
+		go lmdbRanger(lmdbpath, n, seedl, seedc, fin, &rwg)
 		rwg.Add(2)
 	}
 	wwg.Wait()
@@ -59,7 +57,9 @@ func testlmdb() error {
 	return nil
 }
 
-func initlmdb(envflags uint) (env *lmdb.Env, dbi lmdb.DBI, err error) {
+func initlmdb(
+	lmdbpath string, envflags uint) (env *lmdb.Env, dbi lmdb.DBI, err error) {
+
 	env, err = lmdb.NewEnv()
 	if err != nil {
 		log.Errorf("%v", err)
@@ -107,7 +107,7 @@ func initlmdb(envflags uint) (env *lmdb.Env, dbi lmdb.DBI, err error) {
 	return
 }
 
-func readlmdb(envflags uint) (*lmdb.Env, lmdb.DBI, error) {
+func readlmdb(lmdbpath string, envflags uint) (*lmdb.Env, lmdb.DBI, error) {
 	time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
 
 	var dbi lmdb.DBI
@@ -327,9 +327,12 @@ func lmdbDodelete(
 	return false, err
 }
 
-func lmdbGetter(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
+func lmdbGetter(
+	lmdbpath string,
+	n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
+
 	defer wg.Done()
-	env, dbi, err := readlmdb(0)
+	env, dbi, err := readlmdb(lmdbpath, 0)
 	if err != nil {
 		return
 	}
@@ -383,9 +386,11 @@ loop:
 	fmt.Printf(fmsg, ngets, nmisses, duration)
 }
 
-func lmdbRanger(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
+func lmdbRanger(
+	lmdbpath string,
+	n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
-	env, dbi, err := readlmdb(0)
+	env, dbi, err := readlmdb(lmdbpath, 0)
 	if err != nil {
 		return
 	}

@@ -1,7 +1,8 @@
 rm dbtest
 go build
 
-cmdargs="-db bogn -bogn durable -load 1000000 -writes 40000000 -lsm"
+TESTARGS="-load 1000000 -writes 4000000"
+cmdargs="-db bogn -bogn durable -lsm $TESTARGS"
 
 echo "./dbtest $cmdargs"
 ./dbtest $cmdargs

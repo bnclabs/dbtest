@@ -177,25 +177,25 @@ func compareBognLmdb(
 	fmt.Printf("Took %v to compare (%v) BOGN and LMDB\n\n", took, cmpcount)
 }
 
-func diskBognLmdb(name string, setts s.Settings) {
+func diskBognLmdb(name, lmdbpath string, setts s.Settings) {
 	if setts.Bool("durable") == false {
 		return
 	}
+
+	//fmt.Println("\n.......... Final disk check ..............\n")
 
 	index, err := bogn.New(name /*dbtest*/, setts)
 	if err != nil {
 		panic(err)
 	}
-	defer index.Close()
 	index.Start()
+	defer index.Close()
 
-	lmdbenv, lmdbdbi, err := initlmdb(lmdb.NoSync | lmdb.NoMetaSync)
+	lmdbenv, lmdbdbi, err := initlmdb(lmdbpath, lmdb.NoSync|lmdb.NoMetaSync)
 	if err != nil {
 		panic(err)
 	}
 	defer lmdbenv.Close()
-
-	fmt.Println("\n.......... Final disk check ..............\n")
 
 	compareBognLmdb(index, lmdbenv, lmdbdbi)
 }
