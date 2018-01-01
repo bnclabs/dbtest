@@ -55,7 +55,7 @@ func dobogntest(bognsetts s.Settings, lmdbpath string) error {
 	defer index.Close()
 
 	seedl, seedc := int64(options.seed), int64(options.seed)+100
-	fmt.Printf("Seed for load: %v, for ops: %v\n\n", seedl, seedc)
+	fmt.Printf("\nSeed for load: %v, for ops: %v\n\n", seedl, seedc)
 	if err := bognLoad(index, seedl); err != nil {
 		return err
 	}
@@ -110,6 +110,7 @@ func bognvalidator(
 
 	do := func() {
 		if log {
+			fmt.Println()
 			index.Log()
 		}
 
@@ -963,6 +964,7 @@ func bognsettings(seed int) s.Settings {
 	a, b = setts["bubt.diskpaths"], setts["bubt.msize"]
 	c, d := setts["bubt.zsize"], setts["bubt.mmap"]
 	fmt.Printf("bubt diskpaths:%v msize:%v zsize:%v mmap:%v\n", a, b, c, d)
+	fmt.Println()
 
 	return setts
 }

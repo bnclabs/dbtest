@@ -17,6 +17,9 @@ import "github.com/prataprc/gostore/llrb"
 import "github.com/prataprc/gostore/api"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 
+// TODO: BOGN test module is more improved than MVCC, bring this module
+// upto-date with BOGN.
+
 func testmvcc() error {
 	// LMDB instance
 	lmdbpath := makelmdbpath()

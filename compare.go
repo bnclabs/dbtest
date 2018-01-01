@@ -182,7 +182,7 @@ func diskBognLmdb(name, lmdbpath string, setts s.Settings) {
 		return
 	}
 
-	//fmt.Println("\n.......... Final disk check ..............\n")
+	fmt.Println("\n.......... Final disk check ..............\n")
 
 	index, err := bogn.New(name /*dbtest*/, setts)
 	if err != nil {
