@@ -38,8 +38,8 @@ func compareLlrbLmdb(
 				} else if lmdberr != nil {
 					panic(lmdberr)
 				} else if bytes.Compare(llrbkey, lmdbkey) != 0 {
-					fmsg := "expected %q, got %q"
-					panic(fmt.Errorf(fmsg, lmdbkey, llrbkey))
+					fmsg := "expected %q,%q, got %q,%q"
+					panic(fmt.Errorf(fmsg, lmdbkey, lmdbval, llrbkey, llrbval))
 				} else if bytes.Compare(llrbval, lmdbval) != 0 {
 					fmsg := "for %q expected val %q, got val %q\n"
 					x, y := lmdbval[:options.vallen], llrbval[:options.vallen]
@@ -99,8 +99,8 @@ func compareMvccLmdb(
 				} else if lmdberr != nil {
 					panic(lmdberr)
 				} else if bytes.Compare(mvcckey, lmdbkey) != 0 {
-					fmsg := "expected %q, got %q"
-					panic(fmt.Errorf(fmsg, lmdbkey, mvcckey))
+					fmsg := "expected %q,%q, got %q,%q"
+					panic(fmt.Errorf(fmsg, lmdbkey, lmdbval, mvcckey, mvccval))
 				} else if bytes.Compare(mvccval, lmdbval) != 0 {
 					fmsg := "for %q expected %q, got %q"
 					panic(fmt.Errorf(fmsg, mvcckey, lmdbval, mvccval))
@@ -150,8 +150,8 @@ func compareBognLmdb(
 				} else if lmdberr != nil {
 					panic(lmdberr)
 				} else if bytes.Compare(bognkey, lmdbkey) != 0 {
-					fmsg := "expected %q, got %q"
-					panic(fmt.Errorf(fmsg, lmdbkey, bognkey))
+					fmsg := "expected %q,%q, got %q,%q"
+					panic(fmt.Errorf(fmsg, lmdbkey, lmdbval, bognkey, bognval))
 				} else if bytes.Compare(bognval, lmdbval) != 0 {
 					fmsg := "for %q expected %q, got %q"
 					panic(fmt.Errorf(fmsg, bognkey, lmdbval, bognval))
