@@ -3,9 +3,13 @@ package main
 import "fmt"
 import "time"
 import "bytes"
+import "strings"
+import "runtime"
+import "math/rand"
 
 import s "github.com/prataprc/gosettings"
 import "github.com/prataprc/gostore/llrb"
+import "github.com/prataprc/gostore/lib"
 import "github.com/prataprc/gostore/bogn"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 import "github.com/bmatsuo/lmdb-go/lmdbscan"
@@ -38,8 +42,13 @@ func compareLlrbLmdb(
 				} else if lmdberr != nil {
 					panic(lmdberr)
 				} else if bytes.Compare(llrbkey, lmdbkey) != 0 {
+					val, seqno, del, ok := index.Get(lmdbkey, make([]byte, 0))
+					fmt.Printf("%q %v %v %v\n", val, seqno, del, ok)
+					val = cmplmdbget(lmdbenv, lmdbdbi, llrbkey)
+					fmt.Printf("%q\n", val)
 					fmsg := "expected %q,%q, got %q,%q"
 					panic(fmt.Errorf(fmsg, lmdbkey, lmdbval, llrbkey, llrbval))
+
 				} else if bytes.Compare(llrbval, lmdbval) != 0 {
 					fmsg := "for %q expected val %q, got val %q\n"
 					x, y := lmdbval[:options.vallen], llrbval[:options.vallen]
@@ -207,4 +216,38 @@ func comparekeyvalue(key, value []byte, vlen int) bool {
 		}
 	}
 	return true
+}
+
+func cmplmdbget(lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI, key []byte) []byte {
+	value := make([]byte, 10)
+	get := func(txn *lmdb.Txn) (err error) {
+		val, err := txn.Get(lmdbdbi, key)
+		if err != nil {
+			fmsg := "retry: for key %q, err %q"
+			return fmt.Errorf(fmsg, key, err)
+		}
+		value = lib.Fixbuffer(value, int64(len(val)))
+		copy(value, val)
+		return nil
+	}
+	trylmdbget(lmdbenv, 5000, get)
+	return value
+}
+
+func trylmdbget(lmdbenv *lmdb.Env, repeat int, get func(*lmdb.Txn) error) {
+	for i := 0; i < repeat; i++ {
+		if err := lmdbenv.View(get); err == nil {
+			break
+
+		} else if strings.Contains(err.Error(), "retry") {
+			if i == (repeat - 1) {
+				panic(err)
+			}
+
+		} else {
+			panic(err)
+		}
+		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
+		runtime.Gosched()
+	}
 }

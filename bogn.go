@@ -6,7 +6,6 @@ import "fmt"
 import "sync"
 import "time"
 import "bytes"
-import "strings"
 import "runtime"
 import "strconv"
 import "sync/atomic"
@@ -650,27 +649,6 @@ loop:
 	fmt.Printf(fmsg, ngets, nmisses, duration)
 }
 
-func trylmdbget(
-	lmdbenv *lmdb.Env,
-	index *bogn.Bogn, repeat int, get func(*lmdb.Txn) error) {
-
-	for i := 0; i < repeat; i++ {
-		if err := lmdbenv.View(get); err == nil {
-			break
-
-		} else if strings.Contains(err.Error(), "retry") {
-			if i == (repeat - 1) {
-				panic(err)
-			}
-
-		} else {
-			panic(err)
-		}
-		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
-		runtime.Gosched()
-	}
-}
-
 func bognGet1(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *bogn.Bogn, key, value []byte) ([]byte, uint64, bool, bool) {
@@ -691,7 +669,7 @@ func bognGet1(
 		}
 		return nil
 	}
-	trylmdbget(lmdbenv, index, 5000, get)
+	trylmdbget(lmdbenv, 5000, get)
 
 	return bognval, seqno, del, ok
 }
@@ -719,7 +697,7 @@ func bognGet2(
 		}
 		return nil
 	}
-	trylmdbget(lmdbenv, index, 5000, get)
+	trylmdbget(lmdbenv, 5000, get)
 
 	if ok == true {
 		cur, err := bogntxn.OpenCursor(key)
@@ -762,7 +740,7 @@ func bognGet3(
 		}
 		return nil
 	}
-	trylmdbget(lmdbenv, index, 5000, get)
+	trylmdbget(lmdbenv, 5000, get)
 
 	if ok == true {
 		cur, err := view.OpenCursor(key)
