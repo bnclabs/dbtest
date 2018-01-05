@@ -1,9 +1,12 @@
 package main
 
 import "os"
+import "time"
 import "unsafe"
 import "reflect"
 import "path/filepath"
+
+import s "github.com/prataprc/gosettings"
 
 func Fixbuffer(buffer []byte, size int64) []byte {
 	if buffer == nil || int64(cap(buffer)) < size {
@@ -30,4 +33,13 @@ func DirSize(path string) (int64, error) {
 		return err
 	})
 	return size, err
+}
+
+func syncsleep(setts s.Settings) {
+	setts = setts.Trim("llrb.")
+	pausetm := time.Duration(setts.Int64("snapshottick"))
+	if pausetm *= 1000; pausetm > 1000 {
+		pausetm = 1000
+	}
+	time.Sleep(pausetm * time.Millisecond)
 }

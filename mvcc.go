@@ -8,8 +8,9 @@ import "time"
 import "bytes"
 import "strconv"
 import "runtime"
-import "sync/atomic"
 import "math/rand"
+import "unsafe"
+import "sync/atomic"
 
 import "github.com/prataprc/golog"
 import s "github.com/prataprc/gosettings"
@@ -17,10 +18,20 @@ import "github.com/prataprc/gostore/llrb"
 import "github.com/prataprc/gostore/api"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 
-// TODO: BOGN test module is more improved than MVCC, bring this module
-// upto-date with BOGN.
+// manage global mvcc-index and older copy of the mvcc-index.
+var mvccold *llrb.MVCC
+var mvccindex unsafe.Pointer // *llrb.MVCC
+func loadmvccindex() *llrb.MVCC {
+	return (*llrb.MVCC)(atomic.LoadPointer(&mvccindex))
+}
+func storemvccindex(index *llrb.MVCC) {
+	atomic.StorePointer(&mvccindex, unsafe.Pointer(index))
+}
 
 func testmvcc() error {
+	seedl, seedc := int64(options.seed), int64(options.seed)+100
+	fmt.Printf("Seed for load: %v, for ops: %v\n\n", seedl, seedc)
+
 	// LMDB instance
 	lmdbpath := makelmdbpath()
 	defer func() {
@@ -28,51 +39,35 @@ func testmvcc() error {
 			log.Errorf("%v", err)
 		}
 	}()
+
+	// new lmdb instance.
 	lmdbenv, lmdbdbi, err := initlmdb(lmdbpath, lmdb.NoSync|lmdb.NoMetaSync)
 	if err != nil {
 		return err
 	}
 	defer lmdbenv.Close()
-
-	setts := llrb.Defaultsettings()
-	index := llrb.NewMVCC("dbtest", setts)
+	// new llrb instance.
+	mvccname, mvccsetts := "dbtest", llrb.Defaultsettings()
+	index := llrb.NewMVCC("dbtest", mvccsetts)
 	defer index.Destroy()
+	storemvccindex(index)
 
-	seedl, seedc := int64(options.seed), int64(options.seed)+100
-	fmt.Printf("Seed for load: %v, for ops: %v\n", seedl, seedc)
-	if err := mvccLoad(index, seedl); err != nil {
-		return err
-	}
-	seqno = 0
-	atomic.StoreInt64(&totalwrites, 0)
-	if err := lmdbLoad(lmdbenv, lmdbdbi, seedl); err != nil {
-		return err
-	}
-
-	var wwg, rwg sync.WaitGroup
-	fin := make(chan struct{})
-
-	go mvccvalidator(lmdbenv, lmdbdbi, index, true /*log*/, &rwg, fin, setts)
-	rwg.Add(1)
-
-	// writer routines
-	n := atomic.LoadInt64(&numentries)
-	go mvccCreater(lmdbenv, lmdbdbi, index, n, seedc, &wwg)
-	go mvccUpdater(lmdbenv, lmdbdbi, index, n, seedl, seedc, &wwg)
-	go mvccDeleter(lmdbenv, lmdbdbi, index, n, seedl, seedc, &wwg)
-	wwg.Add(3)
-	// reader routines
-	for i := 0; i < numcpus; i++ {
-		go mvccGetter(index, n, seedl, seedc, fin, &rwg)
-		go mvccRanger(index, n, seedl, seedc, fin, &rwg)
-		rwg.Add(2)
-	}
-	wwg.Wait()
-	close(fin)
-	rwg.Wait()
+	// load index and reference with initial data.
+	domvccload(index, lmdbenv, lmdbdbi)
+	// test index and reference read / write
+	domvccrw(mvccname, mvccsetts, index, lmdbenv, lmdbdbi)
 
 	index.Log()
 	index.Validate()
+
+	if mvccold != nil {
+		mvccold.Close()
+		mvccold.Destroy()
+	}
+	if index := loadmvccindex(); index != nil {
+		index.Close()
+		index.Destroy()
+	}
 
 	fmt.Printf("Number of ROLLBACKS: %v\n", rollbacks)
 	fmt.Printf("Number of conflicts: %v\n", conflicts)
@@ -80,32 +75,104 @@ func testmvcc() error {
 	fmt.Printf("MVCC total indexed %v items, expected %v\n", count, n)
 
 	return nil
+
+	return nil
+}
+
+func domvccload(index *llrb.MVCC, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
+	seedl := int64(options.seed)
+	if err := mvccLoad(seedl); err != nil {
+		panic(err)
+	}
+	seqno = 0
+	atomic.StoreInt64(&totalwrites, 0)
+	if err := lmdbLoad(lmdbenv, lmdbdbi, seedl); err != nil {
+		panic(err)
+	}
+}
+
+func domvccrw(
+	mvccname string, mvccsetts s.Settings,
+	index *llrb.MVCC, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
+
+	seedl, seedc := int64(options.seed), int64(options.seed)+100
+
+	var wwg, rwg sync.WaitGroup
+	fin := make(chan struct{})
+
+	go mvccvalidator(
+		lmdbenv, lmdbdbi, true, seedl, mvccname, mvccsetts, &rwg, fin,
+	)
+	rwg.Add(1)
+
+	// writer routines
+	n := atomic.LoadInt64(&numentries)
+	go mvccCreater(lmdbenv, lmdbdbi, n, seedc, &wwg)
+	go mvccUpdater(lmdbenv, lmdbdbi, n, seedl, seedc, &wwg)
+	go mvccDeleter(lmdbenv, lmdbdbi, n, seedl, seedc, &wwg)
+	wwg.Add(3)
+	// reader routines
+	for i := 0; i < numcpus; i++ {
+		go mvccGetter(lmdbenv, lmdbdbi, n, seedl, seedc, fin, &rwg)
+		go mvccRanger(n, seedl, seedc, fin, &rwg)
+		rwg.Add(2)
+	}
+	wwg.Wait()
+	close(fin)
+	rwg.Wait()
+
 }
 
 var mvccrw sync.RWMutex
 
 func mvccvalidator(
-	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
-	index *llrb.MVCC, log bool, wg *sync.WaitGroup, fin chan struct{},
-	mvccsetts s.Settings) {
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI, log bool, seedl int64,
+	mvccname string, mvccsetts s.Settings,
+	wg *sync.WaitGroup, fin chan struct{}) {
 
 	defer wg.Done()
 
-	pausetm := time.Duration(mvccsetts.Int64("snapshottick")) * time.Millisecond
+	rnd := rand.New(rand.NewSource(seedl))
+
+	loadmvcc := func(index *llrb.MVCC) *llrb.MVCC {
+		now := time.Now()
+		newindex := llrb.LoadMVCC(mvccname, mvccsetts, index.Scan())
+		storemvccindex(newindex)
+		thisseqno := index.Getseqno()
+		newindex.Setseqno(thisseqno)
+		fmsg := "Took %v to LoadMVCC index @ %v \n\n"
+		fmt.Printf(fmsg, time.Since(now), thisseqno)
+
+		if mvccold != nil {
+			mvccold.Close()
+			mvccold.Destroy()
+			mvccold = index
+		}
+
+		return newindex
+	}
 
 	do := func() {
+		index := loadmvccindex()
+
 		if log {
+			fmt.Println()
 			index.Log()
 		}
+
 		now := time.Now()
-		//index.Validate()
+		index.Validate()
 		fmt.Printf("Took %v to validate index\n\n", time.Since(now))
+
 		func() {
 			mvccrw.Lock()
 			defer mvccrw.Unlock()
 
-			time.Sleep(pausetm * 50)
+			syncsleep(mvccsetts)
 			compareMvccLmdb(index, lmdbenv, lmdbdbi)
+			if (rnd.Intn(100000) % 3) == 0 {
+				loadmvcc(index)
+			}
 		}()
 	}
 
@@ -117,7 +184,7 @@ func mvccvalidator(
 		}
 	}()
 
-	tick := time.NewTicker(10 * time.Second)
+	tick := time.NewTicker(25 * time.Second)
 	for {
 		<-tick.C
 		select {
@@ -129,7 +196,7 @@ func mvccvalidator(
 	}
 }
 
-func mvccLoad(index *llrb.MVCC, seedl int64) error {
+func mvccLoad(seedl int64) error {
 	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
 
@@ -137,7 +204,7 @@ func mvccLoad(index *llrb.MVCC, seedl int64) error {
 	opaque := atomic.AddUint64(&seqno, 1)
 	key, value := g(make([]byte, 16), make([]byte, 16), opaque)
 	for key != nil {
-		//fmt.Printf("load %q\n", key)
+		index := loadmvccindex()
 		oldvalue, _ := index.Set(key, value, oldvalue)
 		if len(oldvalue) > 0 {
 			panic(fmt.Errorf("unexpected %q", oldvalue))
@@ -148,7 +215,8 @@ func mvccLoad(index *llrb.MVCC, seedl int64) error {
 	atomic.AddInt64(&numentries, int64(options.load))
 	atomic.AddInt64(&totalwrites, int64(options.load))
 
-	fmt.Printf("Loaded MVCC %v items in %v\n\n", options.load, time.Since(now))
+	index := loadmvccindex()
+	fmt.Printf("Loaded MVCC %v items in %v\n\n", index.Count(), time.Since(now))
 	return nil
 }
 
@@ -158,7 +226,7 @@ var mvccsets = []func(index *llrb.MVCC, k, v, ov []byte) (uint64, []byte){
 
 func mvccCreater(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
-	index *llrb.MVCC, n, seedc int64, wg *sync.WaitGroup) {
+	n, seedc int64, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
@@ -172,6 +240,8 @@ func mvccCreater(
 	do := func() error {
 		mvccrw.RLock()
 		defer mvccrw.RUnlock()
+
+		index := loadmvccindex()
 
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
@@ -236,7 +306,8 @@ func vmvccupdater(
 
 func mvccUpdater(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
-	index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
+	n, seedl, seedc int64, wg *sync.WaitGroup) {
+
 	defer wg.Done()
 
 	var nupdates int64
@@ -250,6 +321,8 @@ func mvccUpdater(
 	do := func() error {
 		mvccrw.RLock()
 		defer mvccrw.RUnlock()
+
+		index := loadmvccindex()
 
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
@@ -423,7 +496,7 @@ func vmvccdel(
 
 func mvccDeleter(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
-	index *llrb.MVCC, n, seedl, seedc int64, wg *sync.WaitGroup) {
+	n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
@@ -439,6 +512,8 @@ func mvccDeleter(
 	do := func() error {
 		mvccrw.RLock()
 		defer mvccrw.RUnlock()
+
+		index := loadmvccindex()
 
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
@@ -586,12 +661,13 @@ func mvccDel4(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	return 0, ok
 }
 
-var mvccgets = []func(index *llrb.MVCC, key, val []byte) ([]byte, uint64, bool, bool){
-	mvccGet1, mvccGet3, mvccGet3,
+var mvccgets = []func(*lmdb.Env, lmdb.DBI, *llrb.MVCC, []byte, []byte) ([]byte, uint64, bool, bool){
+	mvccGet1, mvccGet2, mvccGet3,
 }
 
 func mvccGetter(
-	index *llrb.MVCC, n, seedl, seedc int64,
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
+	n, seedl, seedc int64,
 	fin chan struct{}, wg *sync.WaitGroup) {
 
 	defer wg.Done()
@@ -606,10 +682,11 @@ func mvccGetter(
 	value := make([]byte, 16)
 loop:
 	for {
+		index := loadmvccindex()
 		ngets++
 		key = g(key, atomic.LoadInt64(&ncreates))
-		ln := len(mvccgets)
-		value, _, del, _ = mvccgets[rnd.Intn(1000000)%ln](index, key, value)
+		get := mvccgets[rnd.Intn(1000000)%len(mvccgets)]
+		value, _, del, _ = get(lmdbenv, lmdbdbi, index, key, value)
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
 		} else if (int64(x) % 2) != delmod {
@@ -643,21 +720,52 @@ loop:
 }
 
 func mvccGet1(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *llrb.MVCC, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	//fmt.Printf("mvccGet1 %q\n", key)
-	//defer fmt.Printf("mvccGet1-abort %q\n", key)
-	return index.Get(key, value)
+	mvccval, seqno, del, ok := index.Get(key, value)
+
+	get := func(txn *lmdb.Txn) (err error) {
+		lmdbval, err := txn.Get(lmdbdbi, key)
+		if del == false && options.vallen > 0 {
+			if bytes.Compare(mvccval, lmdbval) != 0 {
+				fmsg := "retry: expected %q, got %q"
+				return fmt.Errorf(fmsg, lmdbval, mvccval)
+			}
+		}
+		return nil
+	}
+	trylmdbget(lmdbenv, 5000, get)
+
+	return mvccval, seqno, del, ok
 }
 
 func mvccGet2(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *llrb.MVCC, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	//fmt.Printf("mvccGet2\n")
-	txn := index.BeginTxn(0xC0FFEE)
-	value, _, del, ok := txn.Get(key, value)
+	var mvccval []byte
+	var del, ok bool
+	var mvcctxn api.Transactor
+
+	get := func(txn *lmdb.Txn) (err error) {
+		mvcctxn = index.BeginTxn(0xC0FFEE)
+		mvccval, _, del, ok = mvcctxn.Get(key, value)
+
+		lmdbval, err := txn.Get(lmdbdbi, key)
+		if del == false && options.vallen > 0 {
+			if bytes.Compare(mvccval, lmdbval) != 0 {
+				mvcctxn.Abort()
+				fmsg := "retry: expected %q, got %q"
+				return fmt.Errorf(fmsg, lmdbval, mvccval)
+			}
+		}
+		return nil
+	}
+	trylmdbget(lmdbenv, 5000, get)
+
 	if ok == true {
-		cur, err := txn.OpenCursor(key)
+		cur, err := mvcctxn.OpenCursor(key)
 		if err != nil {
 			panic(err)
 		}
@@ -665,21 +773,39 @@ func mvccGet2(
 			panic(fmt.Errorf("expected %v, got %v", del, cdel))
 		} else if bytes.Compare(ckey, key) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, ckey))
-		} else if cvalue := cur.Value(); bytes.Compare(cvalue, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", value, cvalue))
+		} else if cvalue := cur.Value(); bytes.Compare(cvalue, mvccval) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", mvccval, cvalue))
 		}
 	}
-	//fmt.Printf("mvccGet2-abort\n")
-	txn.Abort()
-	return value, 0, del, ok
+	mvcctxn.Abort()
+
+	return mvccval, 0, del, ok
 }
 
 func mvccGet3(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *llrb.MVCC, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	view := index.View(0x1235)
-	value, _, del, ok := view.Get(key, value)
-	//fmt.Printf("Get3 %q %q %v %v\n", key, value, del, ok)
+	var mvccval []byte
+	var del, ok bool
+	var view api.Transactor
+
+	get := func(txn *lmdb.Txn) (err error) {
+		view = index.View(0x1235)
+		mvccval, _, del, ok = view.Get(key, value)
+
+		lmdbval, err := txn.Get(lmdbdbi, key)
+		if del == false && options.vallen > 0 {
+			if bytes.Compare(mvccval, lmdbval) != 0 {
+				view.Abort()
+				fmsg := "retry: expected %q, got %q"
+				return fmt.Errorf(fmsg, lmdbval, mvccval)
+			}
+		}
+		return nil
+	}
+	trylmdbget(lmdbenv, 5000, get)
+
 	if ok == true {
 		cur, err := view.OpenCursor(key)
 		if err != nil {
@@ -689,18 +815,19 @@ func mvccGet3(
 		if bytes.Compare(key, ykey) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, ykey))
 		} else if del == false && ydel == false {
-			if bytes.Compare(value, yvalue) != 0 {
-				panic(fmt.Errorf("expected %q, got %q", value, yvalue))
+			if bytes.Compare(mvccval, yvalue) != 0 {
+				panic(fmt.Errorf("expected %q, got %q", mvccval, yvalue))
 			}
 		}
 		if ckey, _ := cur.Key(); bytes.Compare(ckey, key) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, ckey))
-		} else if cvalue := cur.Value(); bytes.Compare(cvalue, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", value, cvalue))
+		} else if cvalue := cur.Value(); bytes.Compare(cvalue, mvccval) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", mvccval, cvalue))
 		}
 	}
 	view.Abort()
-	return value, 0, del, ok
+
+	return mvccval, 0, del, ok
 }
 
 var mvccrngs = []func(index *llrb.MVCC, key, val []byte) int64{
@@ -708,7 +835,7 @@ var mvccrngs = []func(index *llrb.MVCC, key, val []byte) int64{
 }
 
 func mvccRanger(
-	index *llrb.MVCC, n, seedl, seedc int64,
+	n, seedl, seedc int64,
 	fin chan struct{}, wg *sync.WaitGroup) {
 
 	defer wg.Done()
@@ -721,6 +848,7 @@ func mvccRanger(
 	epoch, value := time.Now(), make([]byte, 16)
 loop:
 	for {
+		index := loadmvccindex()
 		key = g(key, atomic.LoadInt64(&ncreates))
 		ln := len(mvccrngs)
 		n := mvccrngs[rnd.Intn(1000000)%ln](index, key, value)

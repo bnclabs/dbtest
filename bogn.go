@@ -18,7 +18,9 @@ import "github.com/prataprc/gostore/bogn"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 
 func testbogn() error {
-	bognsetts := bognsettings(options.seed)
+	seedl, seedc := int64(options.seed), int64(options.seed)+100
+	fmt.Printf("Seed for load: %v, for ops: %v\n\n", seedl, seedc)
+
 	lmdbpath := makelmdbpath()
 	defer func() {
 		if err := os.RemoveAll(lmdbpath); err != nil {
@@ -26,43 +28,50 @@ func testbogn() error {
 		}
 	}()
 
-	if err := dobogntest(bognsetts, lmdbpath); err != nil {
-		return err
-	}
-	syncsleep(bognsetts)
-	diskBognLmdb("dbtest", lmdbpath, bognsetts)
-
-	return nil
-}
-
-func dobogntest(bognsetts s.Settings, lmdbpath string) error {
-	// LMDB instance
+	// new lmdb instance.
 	lmdbenv, lmdbdbi, err := initlmdb(lmdbpath, lmdb.NoSync|lmdb.NoMetaSync)
 	if err != nil {
 		return err
 	}
 	defer lmdbenv.Close()
-
-	// Bogn instance
-	bogn.PurgeIndex("dbtest", bognsetts)
-
-	index, err := bogn.New("dbtest", bognsetts)
+	// new bogn instance.
+	bognname, bognsetts := "dbtest", bognsettings(options.seed)
+	bogn.PurgeIndex(bognname, bognsetts) // remove existing instance
+	index, err := bogn.New(bognname, bognsetts)
 	if err != nil {
 		panic(err)
 	}
 	index.Start()
 	defer index.Close()
 
-	seedl, seedc := int64(options.seed), int64(options.seed)+100
-	fmt.Printf("\nSeed for load: %v, for ops: %v\n\n", seedl, seedc)
+	// load index and reference with initial data.
+	dobognload(index, lmdbenv, lmdbdbi)
+	// test index and reference read / write
+	dobognrw(bognsetts, index, lmdbenv, lmdbdbi)
+
+	syncsleep(bognsetts)
+	diskBognLmdb(bognname, lmdbpath, bognsetts)
+
+	return nil
+}
+
+func dobognload(index *bogn.Bogn, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
+	seedl := int64(options.seed)
 	if err := bognLoad(index, seedl); err != nil {
-		return err
+		panic(err)
 	}
 	seqno = 0
 	atomic.StoreInt64(&totalwrites, 0)
 	if err := lmdbLoad(lmdbenv, lmdbdbi, seedl); err != nil {
-		return err
+		panic(err)
 	}
+}
+
+func dobognrw(
+	bognsetts s.Settings, index *bogn.Bogn,
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
+
+	seedl, seedc := int64(options.seed), int64(options.seed)+100
 
 	var wwg, rwg sync.WaitGroup
 	fin := make(chan struct{})
@@ -92,10 +101,6 @@ func dobogntest(bognsetts s.Settings, lmdbpath string) error {
 
 	fmt.Printf("Number of ROLLBACKS: %v\n", rollbacks)
 	fmt.Printf("Number of conflicts: %v\n", conflicts)
-
-	//count, n := index.Count(), atomic.LoadInt64(&numentries)
-	//fmt.Printf("BOGN total indexed %v items, expected %v\n", count, n)
-	return nil
 }
 
 var bognrw sync.RWMutex
@@ -621,11 +626,13 @@ loop:
 		value, _, del, _ = get(lmdbenv, lmdbdbi, index, key, value)
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
+
 		} else if (int64(x) % 2) != delmod {
 			if del {
 				panic(fmt.Errorf("unexpected deleted"))
 			}
 			comparekeyvalue(key, value, options.vallen)
+
 		} else {
 			nmisses++
 		}
@@ -641,6 +648,7 @@ loop:
 			fmsg := "bognGetter {%v items in %v} {%v:%v items in %v}\n"
 			fmt.Printf(fmsg, markercount, x, ngets, nmisses, y)
 		}
+
 		runtime.Gosched()
 	}
 	duration := time.Since(epoch)
@@ -653,11 +661,7 @@ func bognGet1(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *bogn.Bogn, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	//fmt.Printf("bognGet1 %q\n", key)
-	//defer fmt.Printf("bognGet1-abort %q\n", key)
-
 	bognval, seqno, del, ok := index.Get(key, value)
-	//return bognval, seqno, del, ok
 
 	get := func(txn *lmdb.Txn) (err error) {
 		lmdbval, err := txn.Get(lmdbdbi, key)
@@ -682,7 +686,6 @@ func bognGet2(
 	var del, ok bool
 	var bogntxn api.Transactor
 
-	//fmt.Printf("bognGet2\n")
 	get := func(txn *lmdb.Txn) (err error) {
 		bogntxn = index.BeginTxn(0xC0FFEE)
 		bognval, _, del, ok = bogntxn.Get(key, value)
@@ -712,7 +715,6 @@ func bognGet2(
 			panic(fmt.Errorf("expected %q, got %q", bognval, cvalue))
 		}
 	}
-	//fmt.Printf("bognGet2-abort\n")
 	bogntxn.Abort()
 
 	return bognval, 0, del, ok
@@ -891,14 +893,6 @@ func bognRange4(index *bogn.Bogn, key, value []byte) (n int64) {
 	}
 	view.Abort()
 	return
-}
-
-func syncsleep(bognsetts s.Settings) {
-	pausetm := time.Duration(bognsetts.Int64("llrb.snapshottick"))
-	if pausetm *= 1000; pausetm > 1000 {
-		pausetm = 1000
-	}
-	time.Sleep(pausetm * time.Millisecond)
 }
 
 func bognsettings(seed int) s.Settings {

@@ -18,72 +18,49 @@ import "github.com/prataprc/gostore/api"
 import "github.com/prataprc/gostore/llrb"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 
+// manage global llrb-index and older copy of the llrb-index.
 var llrbold *llrb.LLRB
 var llrbindex unsafe.Pointer // *llrb.LLRB
-
 func loadllrbindex() *llrb.LLRB {
 	return (*llrb.LLRB)(atomic.LoadPointer(&llrbindex))
 }
-
 func storellrbindex(index *llrb.LLRB) {
 	atomic.StorePointer(&llrbindex, unsafe.Pointer(index))
 }
 
 func testllrb() error {
-	// LMDB instance
+	seedl, seedc := int64(options.seed), int64(options.seed)+100
+	fmt.Printf("Seed for load: %v, for ops: %v\n\n", seedl, seedc)
+
 	lmdbpath := makelmdbpath()
 	defer func() {
 		if err := os.RemoveAll(lmdbpath); err != nil {
 			log.Errorf("%v", err)
 		}
 	}()
+
+	// new lmdb instance.
 	lmdbenv, lmdbdbi, err := initlmdb(lmdbpath, lmdb.NoSync|lmdb.NoMetaSync)
 	if err != nil {
 		return err
 	}
 	defer lmdbenv.Close()
-
+	// new llrb instance.
 	llrbname, llrbsetts := "dbtest", llrb.Defaultsettings()
 	index := llrb.NewLLRB(llrbname, llrbsetts)
 	storellrbindex(index)
 
-	seedl, seedc := int64(options.seed), int64(options.seed)+100
-	fmt.Printf("Seed for load: %v, for ops: %v\n", seedl, seedc)
-	if err := llrbLoad(seedl); err != nil {
-		return err
-	}
-	seqno = 0
-	if err = lmdbLoad(lmdbenv, lmdbdbi, seedl); err != nil {
-		return err
-	}
-
-	var wwg, rwg sync.WaitGroup
-	fin := make(chan struct{})
-
-	go llrbvalidator(
-		lmdbenv, lmdbdbi, true, seedl, llrbname, llrbsetts, &rwg, fin)
-	rwg.Add(1)
-
-	// writer routines
-	n := atomic.LoadInt64(&numentries)
-	go llrbCreater(lmdbenv, lmdbdbi, n, seedc, &wwg)
-	go llrbUpdater(lmdbenv, lmdbdbi, n, seedl, seedc, &wwg)
-	go llrbDeleter(lmdbenv, lmdbdbi, n, seedl, seedc, &wwg)
-	wwg.Add(3)
-	// reader routines
-	for i := 0; i < options.cpu; i++ {
-		go llrbGetter(n, seedl, seedc, fin, &rwg)
-		go llrbRanger(n, seedl, seedc, fin, &rwg)
-		rwg.Add(2)
-	}
-	wwg.Wait()
-	close(fin)
-	rwg.Wait()
+	// load index and reference with initial data.
+	dollrbload(lmdbenv, lmdbdbi)
+	// test index and reference read / write
+	dollrbrw(llrbname, llrbsetts, index, lmdbenv, lmdbdbi)
 
 	if llrbold != nil {
+		llrbold.Close()
 		llrbold.Destroy()
 	}
 	if index := loadllrbindex(); index != nil {
+		index.Close()
 		index.Destroy()
 	}
 
@@ -92,6 +69,48 @@ func testllrb() error {
 	fmt.Printf("LLRB total indexed %v items, expected %v\n", count, n)
 
 	return nil
+}
+
+func dollrbload(lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
+	seedl := int64(options.seed)
+	if err := llrbLoad(seedl); err != nil {
+		panic(err)
+	}
+	seqno = 0
+	if err := lmdbLoad(lmdbenv, lmdbdbi, seedl); err != nil {
+		panic(err)
+	}
+}
+
+func dollrbrw(
+	llrbname string, llrbsetts s.Settings,
+	index *llrb.LLRB, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
+
+	seedl, seedc := int64(options.seed), int64(options.seed)+100
+
+	var wwg, rwg sync.WaitGroup
+	fin := make(chan struct{})
+
+	// validator
+	go llrbvalidator(
+		lmdbenv, lmdbdbi, true, seedl, llrbname, llrbsetts, &rwg, fin,
+	)
+	rwg.Add(1)
+	// writer routines
+	n := atomic.LoadInt64(&numentries)
+	go llrbCreater(lmdbenv, lmdbdbi, n, seedc, &wwg)
+	go llrbUpdater(lmdbenv, lmdbdbi, n, seedl, seedc, &wwg)
+	go llrbDeleter(lmdbenv, lmdbdbi, n, seedl, seedc, &wwg)
+	wwg.Add(3)
+	// reader routines
+	for i := 0; i < options.cpu; i++ {
+		go llrbGetter(lmdbenv, lmdbdbi, n, seedl, seedc, fin, &rwg)
+		go llrbRanger(n, seedl, seedc, fin, &rwg)
+		rwg.Add(2)
+	}
+	wwg.Wait()
+	close(fin)
+	rwg.Wait()
 }
 
 var llrbrw sync.RWMutex
@@ -115,6 +134,7 @@ func llrbvalidator(
 		fmt.Printf(fmsg, time.Since(now), thisseqno)
 
 		if llrbold != nil {
+			llrbold.Close()
 			llrbold.Destroy()
 			llrbold = index
 		}
@@ -126,8 +146,10 @@ func llrbvalidator(
 		index := loadllrbindex()
 
 		if log {
+			fmt.Println()
 			index.Log()
 		}
+
 		now := time.Now()
 		index.Validate()
 		fmt.Printf("Took %v to validate index\n\n", time.Since(now))
@@ -135,6 +157,7 @@ func llrbvalidator(
 		func() {
 			llrbrw.Lock()
 			defer llrbrw.Unlock()
+
 			compareLlrbLmdb(index, lmdbenv, lmdbdbi)
 			if (rnd.Intn(100000) % 3) == 0 {
 				loadllrb(index)
@@ -171,7 +194,6 @@ func llrbLoad(seedl int64) error {
 	key, value := g(make([]byte, 16), make([]byte, 16), opaque)
 	for ; key != nil; key, value = g(key, value, opaque) {
 		index := loadllrbindex()
-		//fmt.Printf("load %q\n", key)
 		oldvalue, _ := index.Set(key, value, oldvalue)
 		if len(oldvalue) > 0 {
 			panic(fmt.Errorf("unexpected %q", oldvalue))
@@ -273,6 +295,7 @@ func vllrbupdater(
 func llrbUpdater(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	n, seedl, seedc int64, wg *sync.WaitGroup) {
+
 	defer wg.Done()
 
 	var nupdates int64
@@ -593,11 +616,14 @@ func llrbDel4(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	return 0, ok
 }
 
-var llrbgets = []func(x *llrb.LLRB, k, v []byte) ([]byte, uint64, bool, bool){
+var llrbgets = []func(*lmdb.Env, lmdb.DBI, *llrb.LLRB, []byte, []byte) ([]byte, uint64, bool, bool){
 	llrbGet1, llrbGet2, llrbGet3,
 }
 
-func llrbGetter(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
+func llrbGetter(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
+	n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
+
 	defer wg.Done()
 
 	var ngets, nmisses int64
@@ -614,7 +640,7 @@ loop:
 		ngets++
 		key = g(key, atomic.LoadInt64(&ncreates))
 		get := llrbgets[(rnd.Intn(1000000) % len(llrbgets))]
-		value, _, del, _ = get(index, key, value)
+		value, _, del, _ = get(lmdbenv, lmdbdbi, index, key, value)
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
 
@@ -649,21 +675,52 @@ loop:
 }
 
 func llrbGet1(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	//fmt.Printf("llrbGet1 %q\n", key)
-	//defer fmt.Printf("llrbGet1-abort %q\n", key)
-	return index.Get(key, value)
+	llrbval, seqno, del, ok := index.Get(key, value)
+
+	get := func(txn *lmdb.Txn) (err error) {
+		lmdbval, err := txn.Get(lmdbdbi, key)
+		if del == false && options.vallen > 0 {
+			if bytes.Compare(llrbval, lmdbval) != 0 {
+				fmsg := "retry: expected %q, got %q"
+				return fmt.Errorf(fmsg, lmdbval, llrbval)
+			}
+		}
+		return nil
+	}
+	trylmdbget(lmdbenv, 5000, get)
+
+	return llrbval, seqno, del, ok
 }
 
 func llrbGet2(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	//fmt.Printf("llrbGet2\n")
-	txn := index.BeginTxn(0xC0FFEE)
-	value, _, del, ok := txn.Get(key, value)
+	var llrbval []byte
+	var del, ok bool
+	var llrbtxn api.Transactor
+
+	get := func(txn *lmdb.Txn) (err error) {
+		llrbtxn = index.BeginTxn(0xC0FFEE)
+		llrbval, _, del, ok = llrbtxn.Get(key, value)
+
+		lmdbval, err := txn.Get(lmdbdbi, key)
+		if del == false && options.vallen > 0 {
+			if bytes.Compare(llrbval, lmdbval) != 0 {
+				llrbtxn.Abort()
+				fmsg := "retry: expected %q, got %q"
+				return fmt.Errorf(fmsg, lmdbval, llrbval)
+			}
+		}
+		return nil
+	}
+	trylmdbget(lmdbenv, 5000, get)
+
 	if ok == true {
-		cur, err := txn.OpenCursor(key)
+		cur, err := llrbtxn.OpenCursor(key)
 		if err != nil {
 			panic(err)
 		}
@@ -671,20 +728,39 @@ func llrbGet2(
 			panic(fmt.Errorf("expected %v, got %v", del, cdel))
 		} else if bytes.Compare(ckey, key) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, ckey))
-		} else if cvalue := cur.Value(); bytes.Compare(cvalue, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", value, cvalue))
+		} else if cvalue := cur.Value(); bytes.Compare(cvalue, llrbval) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", llrbval, cvalue))
 		}
 	}
-	//fmt.Printf("llrbGet2-abort\n")
-	txn.Abort()
-	return value, 0, del, ok
+	llrbtxn.Abort()
+
+	return llrbval, 0, del, ok
 }
 
 func llrbGet3(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	view := index.View(0x1235)
-	value, _, del, ok := view.Get(key, value)
+	var llrbval []byte
+	var del, ok bool
+	var view api.Transactor
+
+	get := func(txn *lmdb.Txn) (err error) {
+		view = index.View(0x1235)
+		llrbval, _, del, ok = view.Get(key, value)
+
+		lmdbval, err := txn.Get(lmdbdbi, key)
+		if del == false && options.vallen > 0 {
+			if bytes.Compare(llrbval, lmdbval) != 0 {
+				view.Abort()
+				fmsg := "retry: expected %q, got %q"
+				return fmt.Errorf(fmsg, lmdbval, llrbval)
+			}
+		}
+		return nil
+	}
+	trylmdbget(lmdbenv, 5000, get)
+
 	if ok == true {
 		cur, err := view.OpenCursor(key)
 		if err != nil {
@@ -694,12 +770,13 @@ func llrbGet3(
 			panic(fmt.Errorf("expected %v, got %v", del, cdel))
 		} else if bytes.Compare(ckey, key) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, ckey))
-		} else if cvalue := cur.Value(); bytes.Compare(cvalue, value) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", value, cvalue))
+		} else if cvalue := cur.Value(); bytes.Compare(cvalue, llrbval) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", llrbval, cvalue))
 		}
 	}
 	view.Abort()
-	return value, 0, del, ok
+
+	return llrbval, 0, del, ok
 }
 
 var llrbrngs = []func(index *llrb.LLRB, key, val []byte) int64{
