@@ -6,6 +6,7 @@ import "bytes"
 import "strings"
 import "runtime"
 import "math/rand"
+import "sync/atomic"
 
 import s "github.com/prataprc/gosettings"
 import "github.com/prataprc/gostore/llrb"
@@ -19,8 +20,9 @@ func compareLlrbLmdb(
 
 	lmdbcount := getlmdbCount(lmdbenv, lmdbdbi)
 	llrbcount := index.Count()
-	fmsg := "compareLlrbLmdb, lmdbcount:%v llrbcount:%v\n"
-	fmt.Printf(fmsg, lmdbcount, llrbcount)
+	seqno := atomic.LoadUint64(&seqno)
+	fmsg := "compareLlrbLmdb, lmdbcount:%v llrbcount:%v seqno:%v\n"
+	fmt.Printf(fmsg, lmdbcount, llrbcount, seqno)
 
 	epoch, cmpcount := time.Now(), 0
 
@@ -39,8 +41,10 @@ func compareLlrbLmdb(
 				cmpcount++
 				if llrberr != nil {
 					panic(llrberr)
+
 				} else if lmdberr != nil {
 					panic(lmdberr)
+
 				} else if bytes.Compare(llrbkey, lmdbkey) != 0 {
 					val, seqno, del, ok := index.Get(lmdbkey, make([]byte, 0))
 					fmt.Printf("%q %v %v %v\n", val, seqno, del, ok)
