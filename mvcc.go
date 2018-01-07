@@ -186,13 +186,12 @@ func mvccvalidator(
 
 	tick := time.NewTicker(25 * time.Second)
 	for {
-		<-tick.C
 		select {
+		case <-tick.C:
+			do()
 		case <-fin:
 			return
-		default:
 		}
-		do()
 	}
 }
 

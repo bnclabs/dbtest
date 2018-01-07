@@ -175,13 +175,12 @@ func llrbvalidator(
 
 	tick := time.NewTicker(10 * time.Second)
 	for {
-		<-tick.C
 		select {
+		case <-tick.C:
+			do()
 		case <-fin:
 			return
-		default:
 		}
-		do()
 	}
 }
 

@@ -37,19 +37,20 @@ func testbogn() error {
 	// new bogn instance.
 	bognname, bognsetts := "dbtest", bognsettings(options.seed)
 	bogn.PurgeIndex(bognname, bognsetts) // remove existing instance
+	fmt.Println()
 	index, err := bogn.New(bognname, bognsetts)
 	if err != nil {
 		panic(err)
 	}
 	index.Start()
-	defer index.Close()
 
 	// load index and reference with initial data.
 	dobognload(index, lmdbenv, lmdbdbi)
 	// test index and reference read / write
 	dobognrw(bognsetts, index, lmdbenv, lmdbdbi)
 
-	syncsleep(bognsetts)
+	index.Close()
+
 	diskBognLmdb(bognname, lmdbpath, bognsetts)
 
 	return nil
@@ -96,9 +97,9 @@ func dobognrw(
 	close(fin)
 	rwg.Wait()
 
+	fmt.Println()
 	index.Log()
 	index.Validate()
-
 	fmt.Printf("Number of ROLLBACKS: %v\n", rollbacks)
 	fmt.Printf("Number of conflicts: %v\n", conflicts)
 }
@@ -131,15 +132,14 @@ func bognvalidator(
 		}()
 	}
 
-	tick := time.NewTicker(10 * time.Second)
+	tick := time.NewTicker(20 * time.Second)
 	for {
-		<-tick.C
 		select {
+		case <-tick.C:
+			do()
 		case <-fin:
 			return
-		default:
 		}
-		do()
 	}
 }
 
