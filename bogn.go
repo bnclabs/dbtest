@@ -114,6 +114,7 @@ func bognvalidator(
 	defer wg.Done()
 
 	do := func() {
+		fmt.Println()
 		if log {
 			index.Log()
 		}
