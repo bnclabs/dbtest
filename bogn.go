@@ -115,7 +115,6 @@ func bognvalidator(
 
 	do := func() {
 		if log {
-			fmt.Println()
 			index.Log()
 		}
 
