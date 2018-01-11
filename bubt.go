@@ -46,7 +46,8 @@ func testbubt() error {
 
 	now := time.Now()
 	bt.Build(iter, md)
-	fmt.Printf("Took %v to build %v entries\n", time.Since(now), options.load)
+	took := time.Since(now).Round(time.Second)
+	fmt.Printf("Took %v to build %v entries\n", took, options.load)
 	bt.Close()
 
 	index, err := bubt.OpenSnapshot(name, paths, mmap)
@@ -138,7 +139,8 @@ func bubtvalidator(
 		mview.Abort()
 		view.Abort()
 
-		fmt.Printf("Took %v to validate index\n", time.Since(now))
+		took := time.Since(now).Round(time.Second)
+		fmt.Printf("Took %v to validate index\n", took)
 	}
 
 	tick := time.NewTicker(10 * time.Second)
@@ -198,9 +200,9 @@ loop:
 			break loop
 		}
 	}
-	duration := time.Since(epoch)
+	took := time.Since(epoch).Round(time.Second)
 	fmsg := "at exit, bubtGetter %v:%v items in %v\n"
-	fmt.Printf(fmsg, ngets, nmisses, duration)
+	fmt.Printf(fmsg, ngets, nmisses, took)
 }
 
 func bubtGet1(
@@ -255,8 +257,8 @@ loop:
 			break loop
 		}
 	}
-	duration := time.Since(epoch)
-	fmt.Printf("at exit, bubtRanger %v items in %v\n", nranges, duration)
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf("at exit, bubtRanger %v items in %v\n", nranges, took)
 }
 
 func bubtRange1(index *bubt.Snapshot, key, value []byte) (n int64) {

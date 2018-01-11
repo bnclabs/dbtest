@@ -131,7 +131,8 @@ func llrbvalidator(
 		thisseqno := index.Getseqno()
 		newindex.Setseqno(thisseqno)
 		fmsg := "Took %v to LoadLLRB index @ %v \n\n"
-		fmt.Printf(fmsg, time.Since(now), thisseqno)
+		took := time.Since(now).Round(time.Second)
+		fmt.Printf(fmsg, took, thisseqno)
 
 		if llrbold != nil {
 			llrbold.Close()
@@ -152,7 +153,8 @@ func llrbvalidator(
 
 		now := time.Now()
 		index.Validate()
-		fmt.Printf("Took %v to validate index\n\n", time.Since(now))
+		took := time.Since(now).Round(time.Second)
+		fmt.Printf("Took %v to validate index\n\n", took)
 
 		func() {
 			llrbrw.Lock()
@@ -203,7 +205,8 @@ func llrbLoad(seedl int64) error {
 	atomic.AddInt64(&totalwrites, int64(options.load))
 
 	index := loadllrbindex()
-	fmt.Printf("Loaded LLRB %v items in %v\n\n", index.Count(), time.Since(now))
+	took := time.Since(now).Round(time.Second)
+	fmt.Printf("Loaded LLRB %v items in %v\n\n", index.Count(), took)
 	return nil
 }
 
@@ -248,9 +251,10 @@ func llrbCreater(
 		atomic.AddInt64(&totalwrites, 1)
 		if nc := atomic.AddInt64(&ncreates, 1); nc%markercount == 0 {
 			count := index.Count()
-			x, y := time.Since(now).Round(time.Second), time.Since(epoch)
+			x := time.Since(now).Round(time.Second)
+			y := time.Since(epoch).Round(time.Second)
 			fmsg := "llrbCreated {%v items in %v} {%v items in %v} count:%v\n"
-			fmt.Printf(fmsg, markercount, x, nc, y.Round(time.Second), count)
+			fmt.Printf(fmsg, markercount, x, nc, y, count)
 			now = time.Now()
 		}
 		// update the lmdb object
@@ -267,7 +271,8 @@ func llrbCreater(
 		runtime.Gosched()
 	}
 	fmsg := "at exit, llrbCreated %v items in %v\n"
-	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), time.Since(epoch))
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), took)
 }
 
 func vllrbupdater(
@@ -349,7 +354,8 @@ func llrbUpdater(
 		runtime.Gosched()
 	}
 	fmsg := "at exit, llrbUpdated %v items in %v\n"
-	fmt.Printf(fmsg, nupdates, time.Since(epoch))
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf(fmsg, nupdates, took)
 }
 
 func llrbSet1(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
@@ -385,6 +391,9 @@ func llrbSet2(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
 		}
 		comparekeyvalue(key, oldvalue, options.vallen)
 		oldvalue, cas, err := index.SetCAS(key, value, oldvalue, oldcas)
+		if ok == false && len(oldvalue) > 0 {
+			panic(fmt.Errorf("unexpected %q", oldvalue))
+		}
 		//fmt.Printf("update2 %q %q %q \n", key, value, oldvalue)
 		if llrbverifyset2(err, i, key, oldvalue) == "ok" {
 			return cas, oldvalue
@@ -548,7 +557,8 @@ func llrbDeleter(
 		runtime.Gosched()
 	}
 	fmsg := "at exit, llrbDeleter %v:%v items in %v\n"
-	fmt.Printf(fmsg, ndeletes, xdeletes, time.Since(epoch))
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf(fmsg, ndeletes, xdeletes, took)
 }
 
 func llrbDel1(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
@@ -667,10 +677,10 @@ loop:
 
 		runtime.Gosched()
 	}
-	duration := time.Since(epoch)
+	took := time.Since(epoch).Round(time.Second)
 	<-fin
 	fmsg := "at exit, llrbGetter %v:%v items in %v\n"
-	fmt.Printf(fmsg, ngets, nmisses, duration)
+	fmt.Printf(fmsg, ngets, nmisses, took)
 }
 
 func llrbGet1(
@@ -805,9 +815,9 @@ loop:
 		}
 		runtime.Gosched()
 	}
-	duration := time.Since(epoch)
+	took := time.Since(epoch).Round(time.Second)
 	<-fin
-	fmt.Printf("at exit, llrbRanger %v items in %v\n", nranges, duration)
+	fmt.Printf("at exit, llrbRanger %v items in %v\n", nranges, took)
 }
 
 func llrbRange1(index *llrb.LLRB, key, value []byte) (n int64) {

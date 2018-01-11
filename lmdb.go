@@ -175,7 +175,8 @@ func lmdbLoad(env *lmdb.Env, dbi lmdb.DBI, seedl int64) error {
 	atomic.AddInt64(&numentries, int64(options.load))
 	atomic.AddInt64(&totalwrites, int64(options.load))
 
-	fmt.Printf("Loaded LMDB %v items in %v\n\n", options.load, time.Since(now))
+	took := time.Since(now).Round(time.Second)
+	fmt.Printf("Loaded LMDB %v items in %v\n\n", options.load, took)
 	return nil
 }
 
@@ -199,14 +200,16 @@ func lmdbCreater(
 		atomic.AddInt64(&numentries, 1)
 		atomic.AddInt64(&totalwrites, 1)
 		if nc := atomic.AddInt64(&ncreates, 1); nc%markercount == 0 {
-			x, y := time.Since(now), time.Since(epoch)
+			x := time.Since(now).Round(time.Second)
+			y := time.Since(epoch).Round(time.Second)
 			fmsg := "lmdbCreated {%v items in %v} {%v items in %v}\n"
 			fmt.Printf(fmsg, markercount, x, nc, y)
 			now = time.Now()
 		}
 	}
 	fmsg := "at exit, lmdbCreated %v items in %v\n"
-	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), time.Since(epoch))
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), took)
 }
 
 func lmdbDocreate(env *lmdb.Env, dbi lmdb.DBI, key, value []byte) error {
@@ -247,14 +250,16 @@ func lmdbUpdater(
 		}
 		atomic.AddInt64(&totalwrites, 1)
 		if nupdates = nupdates + 1; nupdates%markercount == 0 {
-			x, y := time.Since(now), time.Since(epoch)
+			x := time.Since(now).Round(time.Second)
+			y := time.Since(epoch).Round(time.Second)
 			fmsg := "lmdbUpdated {%v items in %v} {%v items in %v}\n"
 			fmt.Printf(fmsg, markercount, x, nupdates, y)
 			now = time.Now()
 		}
 	}
 	fmsg := "at exit, lmdbUpdated %v items in %v\n"
-	fmt.Printf(fmsg, nupdates, time.Since(epoch))
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf(fmsg, nupdates, took)
 }
 
 func lmdbDoupdate(
@@ -301,14 +306,16 @@ func lmdbDeleter(
 			atomic.AddInt64(&totalwrites, 1)
 		}
 		if (ndeletes+xdeletes)%markercount == 0 {
-			x, y := time.Since(now), time.Since(epoch)
+			x := time.Since(now).Round(time.Second)
+			y := time.Since(epoch).Round(time.Second)
 			fmsg := "lmdbDeleted {%v items in %v} {%v:%v items in %v}\n"
 			fmt.Printf(fmsg, markercount, x, ndeletes, xdeletes, y)
 			now = time.Now()
 		}
 	}
 	fmsg := "at exit, lmdbDeleter %v:%v items in %v\n"
-	fmt.Printf(fmsg, ndeletes, xdeletes, time.Since(epoch))
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf(fmsg, ndeletes, xdeletes, took)
 }
 
 func lmdbDodelete(
@@ -374,16 +381,17 @@ loop:
 		default:
 		}
 		if ngets%markercount == 0 {
-			x, y := time.Since(now), time.Since(epoch)
+			x := time.Since(now).Round(time.Second)
+			y := time.Since(epoch).Round(time.Second)
 			fmsg := "lmdbGetter {%v items in %v} {%v:%v items in %v}\n"
 			fmt.Printf(fmsg, markercount, x, ngets, nmisses, y)
 			now = time.Now()
 		}
 	}
-	duration := time.Since(epoch)
+	took := time.Since(epoch).Round(time.Second)
 	<-fin
 	fmsg := "at exit, lmdbGetter %v:%v items in %v\n"
-	fmt.Printf(fmsg, ngets, nmisses, duration)
+	fmt.Printf(fmsg, ngets, nmisses, took)
 }
 
 func lmdbRanger(
@@ -444,10 +452,10 @@ loop:
 		default:
 		}
 	}
-	duration := time.Since(epoch)
+	took := time.Since(epoch).Round(time.Second)
 	<-fin
 	fmsg := "at exit, lmdbRanger %v:%v items in %v\n"
-	fmt.Printf(fmsg, nranges, nmisses, duration)
+	fmt.Printf(fmsg, nranges, nmisses, took)
 }
 
 func makelmdbpath() string {

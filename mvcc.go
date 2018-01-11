@@ -141,7 +141,8 @@ func mvccvalidator(
 		thisseqno := index.Getseqno()
 		newindex.Setseqno(thisseqno)
 		fmsg := "Took %v to LoadMVCC index @ %v \n\n"
-		fmt.Printf(fmsg, time.Since(now), thisseqno)
+		took := time.Since(now).Round(time.Second)
+		fmt.Printf(fmsg, took, thisseqno)
 
 		if mvccold != nil {
 			mvccold.Close()
@@ -162,7 +163,8 @@ func mvccvalidator(
 
 		now := time.Now()
 		index.Validate()
-		fmt.Printf("Took %v to validate index\n\n", time.Since(now))
+		took := time.Since(now).Round(time.Second)
+		fmt.Printf("Took %v to validate index\n\n", took)
 
 		func() {
 			mvccrw.Lock()
@@ -215,7 +217,8 @@ func mvccLoad(seedl int64) error {
 	atomic.AddInt64(&totalwrites, int64(options.load))
 
 	index := loadmvccindex()
-	fmt.Printf("Loaded MVCC %v items in %v\n\n", index.Count(), time.Since(now))
+	took := time.Since(now).Round(time.Second)
+	fmt.Printf("Loaded MVCC %v items in %v\n\n", index.Count(), took)
 	return nil
 }
 
@@ -260,9 +263,10 @@ func mvccCreater(
 		atomic.AddInt64(&totalwrites, 1)
 		if nc := atomic.AddInt64(&ncreates, 1); nc%markercount == 0 {
 			count := index.Count()
-			x, y := time.Since(now).Round(time.Second), time.Since(epoch)
+			x := time.Since(now).Round(time.Second)
+			y := time.Since(epoch).Round(time.Second)
 			fmsg := "mvccCreated {%v items in %v} {%v items in %v} count:%v\n"
-			fmt.Printf(fmsg, markercount, x, nc, y.Round(time.Second), count)
+			fmt.Printf(fmsg, markercount, x, nc, y, count)
 			now = time.Now()
 		}
 		// update the lmdb object
@@ -279,7 +283,8 @@ func mvccCreater(
 		runtime.Gosched()
 	}
 	fmsg := "at exit, mvccCreated %v items in %v"
-	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), time.Since(epoch))
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), took)
 }
 
 func vmvccupdater(
@@ -361,7 +366,8 @@ func mvccUpdater(
 		runtime.Gosched()
 	}
 	fmsg := "at exit, mvccUpdated %v items in %v\n"
-	fmt.Printf(fmsg, nupdates, time.Since(epoch))
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf(fmsg, nupdates, took)
 }
 
 func mvccSet1(index *llrb.MVCC, key, value, oldvalue []byte) (uint64, []byte) {
@@ -396,6 +402,9 @@ func mvccSet2(index *llrb.MVCC, key, value, oldvalue []byte) (uint64, []byte) {
 		}
 		comparekeyvalue(key, oldvalue, options.vallen)
 		oldvalue, cas, err := index.SetCAS(key, value, oldvalue, oldcas)
+		if ok == false && len(oldvalue) > 0 {
+			panic(fmt.Errorf("unexpected %q", oldvalue))
+		}
 		//fmt.Printf("mvccSet2 %q %q %v %v\n", key, value, oldcas, err)
 		if mvccverifyset2(err, i, key, oldvalue) == "ok" {
 			return cas, oldvalue
@@ -565,7 +574,8 @@ func mvccDeleter(
 		runtime.Gosched()
 	}
 	fmsg := "at exit, mvccDeleter %v:%v items in %v\n"
-	fmt.Printf(fmsg, ndeletes, xdeletes, time.Since(epoch))
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf(fmsg, ndeletes, xdeletes, took)
 }
 
 func mvccDel1(index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
@@ -712,10 +722,10 @@ loop:
 
 		runtime.Gosched()
 	}
-	duration := time.Since(epoch)
+	took := time.Since(epoch).Round(time.Second)
 	<-fin
 	fmsg := "at exit, mvccGetter %v:%v items in %v\n"
-	fmt.Printf(fmsg, ngets, nmisses, duration)
+	fmt.Printf(fmsg, ngets, nmisses, took)
 }
 
 func mvccGet1(
@@ -859,9 +869,9 @@ loop:
 		}
 		runtime.Gosched()
 	}
-	duration := time.Since(epoch)
+	took := time.Since(epoch).Round(time.Second)
 	<-fin
-	fmt.Printf("at exit, mvccRanger %v items in %v\n", nranges, duration)
+	fmt.Printf("at exit, mvccRanger %v items in %v\n", nranges, took)
 }
 
 func mvccRange1(index *llrb.MVCC, key, value []byte) (n int64) {

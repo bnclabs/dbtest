@@ -1,9 +1,9 @@
 rm dbtest
 go build
 
-CASEARGS="-seed 1514722699679526000"
+BUGARGS="-seed 1514722699679526000"
 TESTARGS="-load 1000000 -writes 40000000 -lsm"
-cmdargs="-db bogn -bogn dgm $CASEARGS $TESTARGS"
+cmdargs="-db bogn -bogn dgm $BUGARGS $TESTARGS"
 
 echo "./dbtest $cmdargs"
 ./dbtest $cmdargs

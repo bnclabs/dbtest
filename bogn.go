@@ -51,7 +51,7 @@ func testbogn() error {
 
 	index.Close()
 
-	diskBognLmdb(bognname, lmdbpath, bognsetts)
+	diskBognLmdb(bognname, lmdbpath, seedl, bognsetts)
 
 	return nil
 }
@@ -121,7 +121,8 @@ func bognvalidator(
 
 		now := time.Now()
 		index.Validate()
-		fmt.Printf("Took %v to validate index\n\n", time.Since(now))
+		took := time.Since(now).Round(time.Second)
+		fmt.Printf("Took %v to validate index\n\n", took)
 
 		func() {
 			bognrw.Lock()
@@ -162,7 +163,8 @@ func bognLoad(index *bogn.Bogn, seedl int64) error {
 	atomic.AddInt64(&numentries, int64(options.load))
 	atomic.AddInt64(&totalwrites, int64(options.load))
 
-	fmt.Printf("Loaded BOGN %v items in %v\n\n", options.load, time.Since(now))
+	took := time.Since(now).Round(time.Second)
+	fmt.Printf("Loaded BOGN %v items in %v\n\n", options.load, took)
 	return nil
 }
 
@@ -203,9 +205,10 @@ func bognCreater(
 		atomic.AddInt64(&numentries, 1)
 		atomic.AddInt64(&totalwrites, 1)
 		if nc := atomic.AddInt64(&ncreates, 1); nc%markercount == 0 {
-			x, y := time.Since(now).Round(time.Second), time.Since(epoch)
+			x := time.Since(now).Round(time.Second)
+			y := time.Since(epoch).Round(time.Second)
 			fmsg := "bognCreated {%v items in %v} {%v items in %v}\n"
-			fmt.Printf(fmsg, markercount, x, nc, y.Round(time.Second))
+			fmt.Printf(fmsg, markercount, x, nc, y)
 			now = time.Now()
 		}
 		// update the lmdb object
@@ -222,7 +225,8 @@ func bognCreater(
 		runtime.Gosched()
 	}
 	fmsg := "at exit, bognCreated %v items in %v\n"
-	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), time.Since(epoch))
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), took)
 }
 
 func vbognupdater(
@@ -277,9 +281,10 @@ func bognUpdater(
 
 		atomic.AddInt64(&totalwrites, 1)
 		if nupdates = nupdates + 1; nupdates%markercount == 0 {
-			x, y := time.Since(now).Round(time.Second), time.Since(epoch)
+			x := time.Since(now).Round(time.Second)
+			y := time.Since(epoch).Round(time.Second)
 			fmsg := "bognUpdated {%v items in %v} {%v items in %v}\n"
-			fmt.Printf(fmsg, markercount, x, nupdates, y.Round(time.Second))
+			fmt.Printf(fmsg, markercount, x, nupdates, y)
 			now = time.Now()
 		}
 		// update the lmdb updater.
@@ -297,7 +302,8 @@ func bognUpdater(
 		runtime.Gosched()
 	}
 	fmsg := "at exit, bognUpdated %v items in %v\n"
-	fmt.Printf(fmsg, nupdates, time.Since(epoch))
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf(fmsg, nupdates, took)
 }
 
 func bognSet1(index *bogn.Bogn, key, value, oldvalue []byte) (uint64, []byte) {
@@ -333,6 +339,9 @@ func bognSet2(index *bogn.Bogn, key, value, oldvalue []byte) (uint64, []byte) {
 		}
 		comparekeyvalue(key, oldvalue, options.vallen)
 		oldvalue, cas, err := index.SetCAS(key, value, oldvalue, oldcas)
+		if ok == false && len(oldvalue) > 0 {
+			panic(fmt.Errorf("unexpected %q", oldvalue))
+		}
 		//fmt.Printf("update2 %q %q %q \n", key, value, oldvalue)
 		if bognverifyset2(err, i, key, oldvalue) == "ok" {
 			return cas, oldvalue
@@ -505,7 +514,8 @@ func bognDeleter(
 		runtime.Gosched()
 	}
 	fmsg := "at exit, bognDeleter %v:%v items in %v\n"
-	fmt.Printf(fmsg, ndeletes, xdeletes, time.Since(epoch))
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf(fmsg, ndeletes, xdeletes, took)
 }
 
 func bognDel1(index *bogn.Bogn, key, oldvalue []byte, lsm bool) (uint64, bool) {
@@ -651,10 +661,10 @@ loop:
 
 		runtime.Gosched()
 	}
-	duration := time.Since(epoch)
+	took := time.Since(epoch).Round(time.Second)
 	<-fin
 	fmsg := "at exit, bognGetter %v:%v items in %v\n"
-	fmt.Printf(fmsg, ngets, nmisses, duration)
+	fmt.Printf(fmsg, ngets, nmisses, took)
 }
 
 func bognGet1(
@@ -791,9 +801,9 @@ loop:
 		}
 		runtime.Gosched()
 	}
-	duration := time.Since(epoch)
+	took := time.Since(epoch).Round(time.Second)
 	<-fin
-	fmt.Printf("at exit, bognRanger %v items in %v\n", nranges, duration)
+	fmt.Printf("at exit, bognRanger %v items in %v\n", nranges, took)
 }
 
 func bognRange1(index *bogn.Bogn, key, value []byte) (n int64) {

@@ -91,7 +91,7 @@ func Generatecreate(
 	var opqbin [8]byte
 
 	loadn = int64(loadn * rndscale)
-	intn := int64(9223372036854775807) - loadn
+	intn := int64(9223372036854775) - loadn
 	rnd := rand.New(rand.NewSource(seed))
 
 	return func(key, value []byte, opaque uint64) ([]byte, []byte) {
@@ -126,7 +126,7 @@ func Generateupdate(
 	var getkey func()
 
 	loadn1 := loadn * rndscale
-	intn := int64(9223372036854775807) - loadn1
+	intn := int64(9223372036854775) - loadn1
 	rndl := rand.New(rand.NewSource(seedl))
 	rndc := rand.New(rand.NewSource(seedc))
 	keynum, lcount := int64(0), int64(0)

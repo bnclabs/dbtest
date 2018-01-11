@@ -1,6 +1,7 @@
 package main
 
 import "os"
+import "fmt"
 import "flag"
 import "time"
 import "runtime"
@@ -53,6 +54,10 @@ func optparse(args []string) {
 
 	if options.seed == 0 {
 		options.seed = int(time.Now().UnixNano())
+	}
+	if options.vallen > 0 && options.vallen < 16 {
+		fmt.Println("value length should be atleast 16 bytes")
+		os.Exit(1)
 	}
 }
 

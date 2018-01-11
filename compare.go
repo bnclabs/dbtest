@@ -79,7 +79,7 @@ func compareLlrbLmdb(
 		panic(err)
 	}
 
-	took := time.Since(epoch)
+	took := time.Since(epoch).Round(time.Second)
 	fmt.Printf("Took %v to compare (%v) LLRB and LMDB\n\n", took, cmpcount)
 }
 
@@ -135,7 +135,7 @@ func compareMvccLmdb(
 		panic(err)
 	}
 
-	took := time.Since(epoch)
+	took := time.Since(epoch).Round(time.Second)
 	fmt.Printf("Took %v to compare (%v) MVCC and LMDB\n\n", took, cmpcount)
 }
 
@@ -186,18 +186,25 @@ func compareBognLmdb(
 		panic(err)
 	}
 
-	took := time.Since(epoch)
+	took := time.Since(epoch).Round(time.Second)
 	fmt.Printf("Took %v to compare (%v) BOGN and LMDB\n\n", took, cmpcount)
 }
 
-func diskBognLmdb(name, lmdbpath string, setts s.Settings) {
-	if setts.Bool("durable") == false {
+func diskBognLmdb(name, lmdbpath string, seedl int64, bognsetts s.Settings) {
+	if bognsetts.Bool("durable") == false {
 		return
 	}
 
 	fmt.Println("\n.......... Final disk check ..............\n")
 
-	index, err := bogn.New(name /*dbtest*/, setts)
+	rnd := rand.New(rand.NewSource(seedl))
+	// update settings
+	memstores := []string{"mvcc", "llrb"}
+	bognsetts["memstore"] = memstores[rnd.Intn(len(memstores))]
+	_, _, freemem := getsysmem()
+	capacities := []uint64{freemem, 10000}
+	bognsetts["llrb.memcapacity"] = capacities[1] // rnd.Intn(len(capacities))]
+	index, err := bogn.New(name /*dbtest*/, bognsetts)
 	if err != nil {
 		panic(err)
 	}
@@ -215,9 +222,24 @@ func diskBognLmdb(name, lmdbpath string, setts s.Settings) {
 
 func comparekeyvalue(key, value []byte, vlen int) bool {
 	if vlen > 0 && len(value) > 0 {
-		if bytes.Compare(key, value[:len(key)]) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", key, value))
+		value := value[:len(value)-8]
+		if len(key) >= vlen {
+			if k := key[len(key)-len(value):]; bytes.Compare(k, value) != 0 {
+				panic(fmt.Errorf("expected %q, got %q", k, value))
+			}
+
+		} else {
+			m := len(value) - len(key)
+			for _, ch := range value[:m] {
+				if ch != '0' {
+					panic(fmt.Errorf("expected %v, got %v", '0', ch))
+				}
+			}
+			if bytes.Compare(value[m:], key) != 0 {
+				panic(fmt.Errorf("expected %q, got %q", key, value[m:]))
+			}
 		}
+
 	}
 	return true
 }
