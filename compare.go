@@ -202,8 +202,8 @@ func diskBognLmdb(name, lmdbpath string, seedl int64, bognsetts s.Settings) {
 	memstores := []string{"mvcc", "llrb"}
 	bognsetts["memstore"] = memstores[rnd.Intn(len(memstores))]
 	_, _, freemem := getsysmem()
-	capacities := []uint64{freemem, 10000}
-	bognsetts["llrb.memcapacity"] = capacities[1] // rnd.Intn(len(capacities))]
+	capacities := []uint64{freemem, freemem, 10000}
+	bognsetts["llrb.memcapacity"] = capacities[rnd.Intn(len(capacities))]
 	index, err := bogn.New(name /*dbtest*/, bognsetts)
 	if err != nil {
 		panic(err)
