@@ -78,6 +78,7 @@ func compareLlrbLmdb(
 	if err != nil {
 		panic(err)
 	}
+	iter(true /*fin*/)
 
 	took := time.Since(epoch).Round(time.Second)
 	fmt.Printf("Took %v to compare (%v) LLRB and LMDB\n\n", took, cmpcount)
@@ -134,6 +135,7 @@ func compareMvccLmdb(
 	if err != nil {
 		panic(err)
 	}
+	iter(true /*fin*/)
 
 	took := time.Since(epoch).Round(time.Second)
 	fmt.Printf("Took %v to compare (%v) MVCC and LMDB\n\n", took, cmpcount)
@@ -185,6 +187,7 @@ func compareBognLmdb(
 	if err != nil {
 		panic(err)
 	}
+	iter(true /*fin*/)
 
 	took := time.Since(epoch).Round(time.Second)
 	fmt.Printf("Took %v to compare (%v) BOGN and LMDB\n\n", took, cmpcount)

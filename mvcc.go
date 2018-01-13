@@ -136,7 +136,9 @@ func mvccvalidator(
 
 	loadmvcc := func(index *llrb.MVCC) *llrb.MVCC {
 		now := time.Now()
-		newindex := llrb.LoadMVCC(mvccname, mvccsetts, index.Scan())
+		iter := index.Scan()
+		newindex := llrb.LoadMVCC(mvccname, mvccsetts, iter)
+		iter(true /*fin*/)
 		storemvccindex(newindex)
 		thisseqno := index.Getseqno()
 		newindex.Setseqno(thisseqno)

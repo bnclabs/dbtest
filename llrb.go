@@ -126,7 +126,9 @@ func llrbvalidator(
 
 	loadllrb := func(index *llrb.LLRB) *llrb.LLRB {
 		now := time.Now()
-		newindex := llrb.LoadLLRB(llrbname, llrbsetts, index.Scan())
+		iter := index.Scan()
+		newindex := llrb.LoadLLRB(llrbname, llrbsetts, iter)
+		iter(true /*fin*/)
 		storellrbindex(newindex)
 		thisseqno := index.Getseqno()
 		newindex.Setseqno(thisseqno)
