@@ -7,9 +7,10 @@ import "sync"
 import "time"
 import "bytes"
 import "runtime"
+import "strings"
 import "strconv"
-import "sync/atomic"
 import "math/rand"
+import "sync/atomic"
 
 import s "github.com/prataprc/gosettings"
 import "github.com/prataprc/golog"
@@ -342,10 +343,11 @@ func bognSet2(index *bogn.Bogn, key, value, oldvalue []byte) (uint64, []byte) {
 		if ok == false && len(oldvalue) > 0 {
 			panic(fmt.Errorf("unexpected %q", oldvalue))
 		}
-		//fmt.Printf("update2 %q %q %q \n", key, value, oldvalue)
+		//fmt.Printf("Set2 %q %q %q \n", key, value, oldvalue)
 		if bognverifyset2(err, i, key, oldvalue) == "ok" {
 			return cas, oldvalue
 		}
+		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
 	}
 	panic("unreachable code")
 }
@@ -450,6 +452,7 @@ func bognDeleter(
 	index *bogn.Bogn, n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	defer wg.Done()
+	time.Sleep(1 * time.Second) // delay start for bognUpdater to catchup.
 
 	var ndeletes, xdeletes int64
 	var key, value []byte
@@ -502,7 +505,10 @@ func bognDeleter(
 
 		// update lmdb
 		if _, err := lmdbDodelete(lmdbenv, lmdbdbi, key, value); err != nil {
-			return err
+			if strings.Contains(err.Error(), lmdbmissingerr) {
+				return nil
+			}
+			panic(err)
 		}
 		return nil
 	}
@@ -637,7 +643,7 @@ loop:
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
 
-		} else if (int64(x) % 2) != delmod {
+		} else if (int64(x) % updtdel) != delmod {
 			if del {
 				panic(fmt.Errorf("unexpected deleted"))
 			}
@@ -820,7 +826,7 @@ func bognRange1(index *bogn.Bogn, key, value []byte) (n int64) {
 			panic(err)
 		} else if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
-		} else if (int64(x)%2) != delmod && del == true {
+		} else if (int64(x)%updtdel) != delmod && del == true {
 			panic("unexpected delete")
 		}
 		comparekeyvalue(key, value, options.vallen)
@@ -845,7 +851,7 @@ func bognRange2(index *bogn.Bogn, key, value []byte) (n int64) {
 		}
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
-		} else if (int64(x)%2) != delmod && del == true {
+		} else if (int64(x)%updtdel) != delmod && del == true {
 			panic("unexpected delete")
 		}
 		comparekeyvalue(key, value, options.vallen)
@@ -870,7 +876,7 @@ func bognRange3(index *bogn.Bogn, key, value []byte) (n int64) {
 		}
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
-		} else if (int64(x)%2) != delmod && del == true {
+		} else if (int64(x)%updtdel) != delmod && del == true {
 			panic("unexpected delete")
 		}
 		comparekeyvalue(key, value, options.vallen)
@@ -895,7 +901,7 @@ func bognRange4(index *bogn.Bogn, key, value []byte) (n int64) {
 		}
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
-		} else if (int64(x)%2) != delmod && del == true {
+		} else if (int64(x)%updtdel) != delmod && del == true {
 			panic("unexpected delete")
 		}
 		comparekeyvalue(key, value, options.vallen)

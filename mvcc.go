@@ -7,10 +7,11 @@ import "sync"
 import "time"
 import "bytes"
 import "strconv"
+import "strings"
 import "runtime"
-import "math/rand"
 import "unsafe"
 import "sync/atomic"
+import "math/rand"
 
 import "github.com/prataprc/golog"
 import s "github.com/prataprc/gosettings"
@@ -479,17 +480,20 @@ func vmvccdel(
 			view = idx.View(0x1234)
 		}
 
+		// what for snapshottick.
+		time.Sleep(10 * time.Millisecond)
+
 		cur, err := view.OpenCursor(key)
 		if err == nil {
-			_, oldvalue, cas, del, err := cur.YNext(false)
+			_, value, cas, del, err := cur.YNext(false)
 			if err != nil {
 			} else if del == false {
 				err = fmt.Errorf("expected delete")
 			} else if refcas > 0 && cas != refcas {
 				err = fmt.Errorf("expected %v, got %v", refcas, cas)
 			}
-			if err == nil && len(oldvalue) > 0 {
-				comparekeyvalue(key, oldvalue, options.vallen)
+			if err == nil && len(value) > 0 {
+				comparekeyvalue(key, value, options.vallen)
 			}
 		}
 		view.Abort()
@@ -509,6 +513,7 @@ func mvccDeleter(
 	n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	defer wg.Done()
+	time.Sleep(1 * time.Second) // delay start for mvccUpdater to catchup.
 
 	var ndeletes, xdeletes int64
 	var key, value []byte
@@ -564,7 +569,10 @@ func mvccDeleter(
 
 		// update lmdb
 		if _, err := lmdbDodelete(lmdbenv, lmdbdbi, key, value); err != nil {
-			return err
+			if strings.Contains(err.Error(), lmdbmissingerr) {
+				return nil
+			}
+			panic(err)
 		}
 		return nil
 	}
@@ -700,7 +708,7 @@ loop:
 		value, _, del, _ = get(lmdbenv, lmdbdbi, index, key, value)
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
-		} else if (int64(x) % 2) != delmod {
+		} else if (int64(x) % updtdel) != delmod {
 			if del {
 				panic(fmt.Errorf("unexpected deleted"))
 			}
@@ -890,7 +898,7 @@ func mvccRange1(index *llrb.MVCC, key, value []byte) (n int64) {
 			panic(err)
 		} else if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
-		} else if (int64(x)%2) != delmod && del == true {
+		} else if (int64(x)%updtdel) != delmod && del == true {
 			panic("unexpected delete")
 		}
 		comparekeyvalue(key, value, options.vallen)
@@ -915,7 +923,7 @@ func mvccRange2(index *llrb.MVCC, key, value []byte) (n int64) {
 		}
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
-		} else if (int64(x)%2) != delmod && del == true {
+		} else if (int64(x)%updtdel) != delmod && del == true {
 			panic("unexpected delete")
 		} else if del == false {
 			comparekeyvalue(key, value, options.vallen)
@@ -941,7 +949,7 @@ func mvccRange3(index *llrb.MVCC, key, value []byte) (n int64) {
 		}
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
-		} else if (int64(x)%2) != delmod && del == true {
+		} else if (int64(x)%updtdel) != delmod && del == true {
 			panic("unexpected delete")
 		} else if del == false {
 			comparekeyvalue(key, value, options.vallen)
@@ -967,7 +975,7 @@ func mvccRange4(index *llrb.MVCC, key, value []byte) (n int64) {
 		}
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
-		} else if (int64(x)%2) != delmod && del == true {
+		} else if (int64(x)%updtdel) != delmod && del == true {
 			panic("unexpected delete")
 		} else if del == false {
 			comparekeyvalue(key, value, options.vallen)

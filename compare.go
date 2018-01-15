@@ -50,6 +50,7 @@ func compareLlrbLmdb(
 					fmt.Printf("%q %v %v %v\n", val, seqno, del, ok)
 					val = cmplmdbget(lmdbenv, lmdbdbi, llrbkey)
 					fmt.Printf("%q\n", val)
+
 					fmsg := "expected %q,%q, got %q,%q"
 					panic(fmt.Errorf(fmsg, lmdbkey, lmdbval, llrbkey, llrbval))
 
@@ -113,6 +114,11 @@ func compareMvccLmdb(
 				} else if lmdberr != nil {
 					panic(lmdberr)
 				} else if bytes.Compare(mvcckey, lmdbkey) != 0 {
+					val, seqno, del, ok := index.Get(lmdbkey, make([]byte, 0))
+					fmt.Printf("%q %v %v %v\n", val, seqno, del, ok)
+					val = cmplmdbget(lmdbenv, lmdbdbi, mvcckey)
+					fmt.Printf("%q\n", val)
+
 					fmsg := "expected %q,%q, got %q,%q"
 					panic(fmt.Errorf(fmsg, lmdbkey, lmdbval, mvcckey, mvccval))
 				} else if bytes.Compare(mvccval, lmdbval) != 0 {

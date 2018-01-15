@@ -13,3 +13,4 @@ var updmod = int64(1)
 var conflicts = int64(0)
 var rollbacks = int64(0)
 var numcpus = runtime.GOMAXPROCS(-1)
+var lmdbmissingerr = "No matching key/data pair found"

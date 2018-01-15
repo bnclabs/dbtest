@@ -265,11 +265,9 @@ func lmdbUpdater(
 func lmdbDoupdate(
 	env *lmdb.Env, dbi lmdb.DBI, key, value []byte) (new bool, err error) {
 
-	missingerr := "No matching key/data pair found"
-
 	update := func(txn *lmdb.Txn) (err error) {
 		_, err = txn.Get(dbi, key)
-		new = err != nil && strings.Contains(err.Error(), missingerr)
+		new = err != nil && strings.Contains(err.Error(), lmdbmissingerr)
 		if err := txn.Put(dbi, key, value, 0); err != nil {
 			return err
 		}

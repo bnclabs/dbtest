@@ -8,6 +8,7 @@ import "time"
 import "bytes"
 import "unsafe"
 import "runtime"
+import "strings"
 import "strconv"
 import "sync/atomic"
 import "math/rand"
@@ -491,6 +492,7 @@ func llrbDeleter(
 	n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	defer wg.Done()
+	time.Sleep(1 * time.Second) // delay start for llrbUpdater to catchup.
 
 	var ndeletes, xdeletes int64
 	var key, value []byte
@@ -547,7 +549,10 @@ func llrbDeleter(
 
 		// update lmdb
 		if _, err := lmdbDodelete(lmdbenv, lmdbdbi, key, value); err != nil {
-			return err
+			if strings.Contains(err.Error(), lmdbmissingerr) {
+				return nil
+			}
+			panic(err)
 		}
 		return nil
 	}
@@ -655,7 +660,7 @@ loop:
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
 
-		} else if (int64(x) % 2) != delmod {
+		} else if (int64(x) % updtdel) != delmod {
 			if del {
 				panic(fmt.Errorf("unexpected deleted"))
 			}
@@ -836,7 +841,7 @@ func llrbRange1(index *llrb.LLRB, key, value []byte) (n int64) {
 			panic(err)
 		} else if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
-		} else if (int64(x)%2) != delmod && del == true {
+		} else if (int64(x)%updtdel) != delmod && del == true {
 			panic("unexpected delete")
 		} else if del == false {
 			comparekeyvalue(key, value, options.vallen)
@@ -862,7 +867,7 @@ func llrbRange2(index *llrb.LLRB, key, value []byte) (n int64) {
 		}
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
-		} else if (int64(x)%2) != delmod && del == true {
+		} else if (int64(x)%updtdel) != delmod && del == true {
 			panic("unexpected delete")
 		} else if del == false {
 			comparekeyvalue(key, value, options.vallen)
@@ -888,7 +893,7 @@ func llrbRange3(index *llrb.LLRB, key, value []byte) (n int64) {
 		}
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
-		} else if (int64(x)%2) != delmod && del == true {
+		} else if (int64(x)%updtdel) != delmod && del == true {
 			panic("unexpected delete")
 		} else if del == false {
 			comparekeyvalue(key, value, options.vallen)
@@ -914,7 +919,7 @@ func llrbRange4(index *llrb.LLRB, key, value []byte) (n int64) {
 		}
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
-		} else if (int64(x)%2) != delmod && del == true {
+		} else if (int64(x)%updtdel) != delmod && del == true {
 			panic("unexpected delete")
 		} else if del == false {
 			comparekeyvalue(key, value, options.vallen)
