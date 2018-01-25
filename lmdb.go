@@ -10,7 +10,7 @@ import "path/filepath"
 import "sync/atomic"
 import "math/rand"
 
-import "github.com/prataprc/golog"
+import "github.com/bnclabs/golog"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 
 func testlmdb() error {

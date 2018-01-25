@@ -8,7 +8,7 @@ import "runtime"
 import "math/rand"
 import "sync/atomic"
 
-import s "github.com/prataprc/gosettings"
+import s "github.com/bnclabs/gosettings"
 import "github.com/prataprc/gostore/llrb"
 import "github.com/prataprc/gostore/lib"
 import "github.com/prataprc/gostore/bogn"

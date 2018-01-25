@@ -6,7 +6,7 @@ import "unsafe"
 import "reflect"
 import "path/filepath"
 
-import s "github.com/prataprc/gosettings"
+import s "github.com/bnclabs/gosettings"
 
 func Fixbuffer(buffer []byte, size int64) []byte {
 	if buffer == nil || int64(cap(buffer)) < size {

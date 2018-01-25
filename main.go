@@ -8,7 +8,7 @@ import "runtime"
 import "net/http"
 import _ "net/http/pprof"
 
-import "github.com/prataprc/golog"
+import "github.com/bnclabs/golog"
 import "github.com/cloudfoundry/gosigar"
 
 // TODO: add Validate for llrb and mvcc.
