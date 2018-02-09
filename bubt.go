@@ -11,9 +11,9 @@ import "sync/atomic"
 import "path/filepath"
 import "math/rand"
 
-import "github.com/prataprc/gostore/api"
-import "github.com/prataprc/gostore/bubt"
-import "github.com/prataprc/gostore/llrb"
+import "github.com/bnclabs/gostore/api"
+import "github.com/bnclabs/gostore/bubt"
+import "github.com/bnclabs/gostore/llrb"
 
 func testbubt() error {
 	setts := llrb.Defaultsettings()

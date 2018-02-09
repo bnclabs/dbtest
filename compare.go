@@ -9,9 +9,9 @@ import "math/rand"
 import "sync/atomic"
 
 import s "github.com/bnclabs/gosettings"
-import "github.com/prataprc/gostore/llrb"
-import "github.com/prataprc/gostore/lib"
-import "github.com/prataprc/gostore/bogn"
+import "github.com/bnclabs/gostore/llrb"
+import "github.com/bnclabs/gostore/lib"
+import "github.com/bnclabs/gostore/bogn"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 import "github.com/bmatsuo/lmdb-go/lmdbscan"
 

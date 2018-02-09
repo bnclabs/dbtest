@@ -15,8 +15,8 @@ import "math/rand"
 
 import "github.com/bnclabs/golog"
 import s "github.com/bnclabs/gosettings"
-import "github.com/prataprc/gostore/api"
-import "github.com/prataprc/gostore/llrb"
+import "github.com/bnclabs/gostore/api"
+import "github.com/bnclabs/gostore/llrb"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 
 // manage global llrb-index and older copy of the llrb-index.

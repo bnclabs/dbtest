@@ -14,8 +14,8 @@ import "sync/atomic"
 
 import s "github.com/bnclabs/gosettings"
 import "github.com/bnclabs/golog"
-import "github.com/prataprc/gostore/api"
-import "github.com/prataprc/gostore/bogn"
+import "github.com/bnclabs/gostore/api"
+import "github.com/bnclabs/gostore/bogn"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 
 func testbogn() error {
