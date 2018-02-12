@@ -81,6 +81,8 @@ func dollrbload(lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
 	if err := lmdbLoad(lmdbenv, lmdbdbi, seedl); err != nil {
 		panic(err)
 	}
+	atomic.AddInt64(&numentries, -int64(options.load))
+	atomic.AddInt64(&totalwrites, -int64(options.load))
 }
 
 func dollrbrw(
@@ -148,6 +150,9 @@ func llrbvalidator(
 
 	do := func() {
 		index := loadllrbindex()
+		if err := lmdbenv.Sync(true /*force*/); err != nil {
+			panic(err)
+		}
 
 		if log {
 			fmt.Println()
@@ -178,7 +183,7 @@ func llrbvalidator(
 		}
 	}()
 
-	tick := time.NewTicker(10 * time.Second)
+	tick := time.NewTicker(100 * time.Second)
 	for {
 		select {
 		case <-tick.C:
@@ -568,24 +573,24 @@ func llrbDeleter(
 	fmt.Printf(fmsg, ndeletes, xdeletes, took)
 }
 
-func llrbDel1(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
+func llrbDel1(index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
-	oldvalue, cas := index.Delete(key, oldvalue, lsm)
-	if len(oldvalue) > 0 {
-		comparekeyvalue(key, oldvalue, options.vallen)
+	oldval, cas := index.Delete(key, oldval, lsm)
+	if len(oldval) > 0 {
+		comparekeyvalue(key, oldval, options.vallen)
 		ok = true
 	}
 	return cas, ok
 }
 
-func llrbDel2(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
+func llrbDel2(index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
 	txn := index.BeginTxn(0xC0FFEE)
-	oldvalue = txn.Delete(key, oldvalue, lsm)
-	if len(oldvalue) > 0 {
-		comparekeyvalue(key, oldvalue, options.vallen)
+	oldval = txn.Delete(key, oldval, lsm)
+	if len(oldval) > 0 {
+		comparekeyvalue(key, oldval, options.vallen)
 		ok = true
 	}
 	if err := txn.Commit(); err != nil {
@@ -594,7 +599,7 @@ func llrbDel2(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	return 0, ok
 }
 
-func llrbDel3(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
+func llrbDel3(index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
 	txn := index.BeginTxn(0xC0FFEE)
@@ -602,9 +607,9 @@ func llrbDel3(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	if err != nil {
 		panic(err)
 	}
-	oldvalue = cur.Delete(key, oldvalue, lsm)
-	if len(oldvalue) > 0 {
-		comparekeyvalue(key, oldvalue, options.vallen)
+	oldval = cur.Delete(key, oldval, lsm)
+	if len(oldval) > 0 {
+		comparekeyvalue(key, oldval, options.vallen)
 		ok = true
 	}
 	if err := txn.Commit(); err != nil {
@@ -613,7 +618,7 @@ func llrbDel3(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
 	return 0, ok
 }
 
-func llrbDel4(index *llrb.LLRB, key, oldvalue []byte, lsm bool) (uint64, bool) {
+func llrbDel4(index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
 	var ok bool
 
 	txn := index.BeginTxn(0xC0FFEE)
@@ -928,4 +933,71 @@ func llrbRange4(index *llrb.LLRB, key, value []byte) (n int64) {
 	}
 	view.Abort()
 	return
+}
+
+func compareLlrbLmdb(index *llrb.LLRB, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
+	lmdbcount := getlmdbCount(lmdbenv, lmdbdbi)
+	llrbcount := index.Count()
+	seqno := atomic.LoadUint64(&seqno)
+	fmsg := "compareLlrbLmdb, lmdbcount:%v llrbcount:%v seqno:%v\n"
+	fmt.Printf(fmsg, lmdbcount, llrbcount, seqno)
+
+	epoch, cmpcount := time.Now(), 0
+
+	iter := index.Scan()
+	err := lmdbenv.View(func(txn *lmdb.Txn) error {
+		lmdbcur, err := txn.OpenCursor(lmdbdbi)
+		if err != nil {
+			panic(err)
+		}
+
+		llrbkey, llrbval, _, llrbdel, llrberr := iter(false /*fin*/)
+		lmdbkey, lmdbval, lmdberr := lmdbcur.Get(nil, nil, lmdb.Next)
+
+		for llrbkey != nil {
+			if llrbdel == false {
+				cmpcount++
+				if llrberr != nil {
+					panic(llrberr)
+
+				} else if lmdberr != nil {
+					panic(lmdberr)
+
+				} else if bytes.Compare(llrbkey, lmdbkey) != 0 {
+					val, seqno, del, ok := index.Get(lmdbkey, make([]byte, 0))
+					fmt.Printf("%q %v %v %v\n", val, seqno, del, ok)
+					val = cmplmdbget(lmdbenv, lmdbdbi, llrbkey)
+					fmt.Printf("%q\n", val)
+
+					fmsg := "expected %q,%q, got %q,%q"
+					panic(fmt.Errorf(fmsg, lmdbkey, lmdbval, llrbkey, llrbval))
+
+				} else if bytes.Compare(llrbval, lmdbval) != 0 {
+					fmsg := "for %q expected val %q, got val %q\n"
+					x, y := lmdbval[:options.vallen], llrbval[:options.vallen]
+					fmt.Printf(fmsg, llrbkey, x, y)
+					fmsg = "for %q expected seqno %v, got %v\n"
+					x, y = lmdbval[options.vallen:], llrbval[options.vallen:]
+					fmt.Printf(fmsg, llrbkey, lmdbval, llrbval)
+					panic("error")
+				}
+				//fmt.Printf("compareLlrbLmdb %q okay ...\n", llrbkey)
+			}
+
+			llrbkey, llrbval, _, llrbdel, llrberr = iter(false /*fin*/)
+			lmdbkey, lmdbval, lmdberr = lmdbcur.Get(nil, nil, lmdb.Next)
+		}
+		if lmdbkey != nil {
+			return fmt.Errorf("found lmdb key %q\n", lmdbkey)
+		}
+
+		return lmdberr
+	})
+	if err != nil {
+		panic(err)
+	}
+	iter(true /*fin*/)
+
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf("Took %v to compare (%v) LLRB and LMDB\n\n", took, cmpcount)
 }

@@ -18,6 +18,7 @@ import s "github.com/bnclabs/gosettings"
 import "github.com/bnclabs/gostore/llrb"
 import "github.com/bnclabs/gostore/api"
 import "github.com/bmatsuo/lmdb-go/lmdb"
+import "github.com/bmatsuo/lmdb-go/lmdbscan"
 
 // manage global mvcc-index and older copy of the mvcc-index.
 var mvccold *llrb.MVCC
@@ -984,4 +985,64 @@ func mvccRange4(index *llrb.MVCC, key, value []byte) (n int64) {
 	}
 	view.Abort()
 	return
+}
+
+func compareMvccLmdb(index *llrb.MVCC, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
+	lmdbcount := getlmdbCount(lmdbenv, lmdbdbi)
+	mvcccount := index.Count()
+	fmsg := "compareMvccLmdb, lmdbcount:%v mvcccount:%v\n"
+	fmt.Printf(fmsg, lmdbcount, mvcccount)
+
+	epoch, cmpcount := time.Now(), 0
+
+	//fmt.Println("mvcc seqno", index.Getseqno())
+	iter := index.Scan()
+	err := lmdbenv.View(func(txn *lmdb.Txn) error {
+		lmdbs := lmdbscan.New(txn, lmdbdbi)
+		defer lmdbs.Close()
+
+		lmdbs.Scan()
+
+		mvcckey, mvccval, _, mvccdel, mvccerr := iter(false /*fin*/)
+		lmdbkey, lmdbval, lmdberr := lmdbs.Key(), lmdbs.Val(), lmdbs.Err()
+
+		for mvcckey != nil {
+			if mvccdel == false {
+				cmpcount++
+				if mvccerr != nil {
+					panic(mvccerr)
+				} else if lmdberr != nil {
+					panic(lmdberr)
+				} else if bytes.Compare(mvcckey, lmdbkey) != 0 {
+					val, seqno, del, ok := index.Get(lmdbkey, make([]byte, 0))
+					fmt.Printf("%q %v %v %v\n", val, seqno, del, ok)
+					val = cmplmdbget(lmdbenv, lmdbdbi, mvcckey)
+					fmt.Printf("%q\n", val)
+
+					fmsg := "expected %q,%q, got %q,%q"
+					panic(fmt.Errorf(fmsg, lmdbkey, lmdbval, mvcckey, mvccval))
+				} else if bytes.Compare(mvccval, lmdbval) != 0 {
+					fmsg := "for %q expected %q, got %q"
+					panic(fmt.Errorf(fmsg, mvcckey, lmdbval, mvccval))
+				}
+				//fmt.Printf("compareMvccLmdb %q okay ...\n", llrbkey)
+			}
+
+			lmdbs.Scan()
+			mvcckey, mvccval, _, mvccdel, mvccerr = iter(false /*fin*/)
+			lmdbkey, lmdbval, lmdberr = lmdbs.Key(), lmdbs.Val(), lmdbs.Err()
+		}
+		if lmdbkey != nil {
+			return fmt.Errorf("found lmdb key %q\n", lmdbkey)
+		}
+
+		return lmdberr
+	})
+	if err != nil {
+		panic(err)
+	}
+	iter(true /*fin*/)
+
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf("Took %v to compare (%v) MVCC and LMDB\n\n", took, cmpcount)
 }

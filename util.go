@@ -1,7 +1,9 @@
 package main
 
 import "os"
+import "fmt"
 import "time"
+import "bytes"
 import "unsafe"
 import "reflect"
 import "path/filepath"
@@ -42,4 +44,28 @@ func syncsleep(setts s.Settings) {
 		pausetm = 1000
 	}
 	time.Sleep(pausetm * time.Millisecond)
+}
+
+func comparekeyvalue(key, value []byte, vlen int) bool {
+	if vlen > 0 && len(value) > 0 {
+		value := value[:len(value)-8]
+		if len(key) >= vlen {
+			if k := key[len(key)-len(value):]; bytes.Compare(k, value) != 0 {
+				panic(fmt.Errorf("expected %q, got %q", k, value))
+			}
+
+		} else {
+			m := len(value) - len(key)
+			for _, ch := range value[:m] {
+				if ch != '0' {
+					panic(fmt.Errorf("expected %v, got %v", '0', ch))
+				}
+			}
+			if bytes.Compare(value[m:], key) != 0 {
+				panic(fmt.Errorf("expected %q, got %q", key, value[m:]))
+			}
+		}
+
+	}
+	return true
 }

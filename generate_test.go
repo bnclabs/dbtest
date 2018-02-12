@@ -1,13 +1,22 @@
 package main
 
-import "fmt"
 import "time"
 import "reflect"
 import "testing"
 import "strconv"
 import "math/rand"
 
-var _ = fmt.Sprintf("dummy")
+func TestRandIntnUnique(t *testing.T) {
+	s := rand.NewSource(100)
+	rnd, n := rand.New(s), 10000000
+	m := map[int]bool{}
+	now := time.Now()
+	for i := 0; i < n; i++ {
+		m[rnd.Intn(n)] = true
+	}
+	fmsg := "Took %v to populate %v(%v) items in map"
+	t.Logf(fmsg, time.Since(now), len(m), n)
+}
 
 func TestRandSource(t *testing.T) {
 	rnd := rand.New(rand.NewSource(100))
@@ -239,5 +248,20 @@ func BenchmarkGeneratedelete(b *testing.B) {
 	key := g(nil)
 	for i := 0; i < b.N; i++ {
 		g(key)
+	}
+}
+
+func BenchmarkSourceInt63(b *testing.B) {
+	s := rand.NewSource(100)
+	for i := 0; i < b.N; i++ {
+		s.Int63()
+	}
+}
+
+func BenchmarkRandIntn(b *testing.B) {
+	s := rand.NewSource(100)
+	rnd := rand.New(s)
+	for i := 0; i < b.N; i++ {
+		rnd.Intn(1 * 1000 * 1000)
 	}
 }

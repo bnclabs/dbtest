@@ -6,11 +6,13 @@ import "sync"
 import "time"
 import "strings"
 import "strconv"
+import "runtime"
 import "path/filepath"
 import "sync/atomic"
 import "math/rand"
 
 import "github.com/bnclabs/golog"
+import "github.com/bnclabs/gostore/lib"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 
 func testlmdb() error {
@@ -478,4 +480,38 @@ func getlmdbCount(env *lmdb.Env, dbi lmdb.DBI) (count uint64) {
 		panic(err)
 	}
 	return
+}
+
+func cmplmdbget(lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI, key []byte) []byte {
+	value := make([]byte, 10)
+	get := func(txn *lmdb.Txn) (err error) {
+		val, err := txn.Get(lmdbdbi, key)
+		if err != nil {
+			fmsg := "retry: for key %q, err %q"
+			return fmt.Errorf(fmsg, key, err)
+		}
+		value = lib.Fixbuffer(value, int64(len(val)))
+		copy(value, val)
+		return nil
+	}
+	trylmdbget(lmdbenv, 5000, get)
+	return value
+}
+
+func trylmdbget(lmdbenv *lmdb.Env, repeat int, get func(*lmdb.Txn) error) {
+	for i := 0; i < repeat; i++ {
+		if err := lmdbenv.View(get); err == nil {
+			break
+
+		} else if strings.Contains(err.Error(), "retry") {
+			if i == (repeat - 1) {
+				panic(err)
+			}
+
+		} else {
+			panic(err)
+		}
+		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
+		runtime.Gosched()
+	}
 }

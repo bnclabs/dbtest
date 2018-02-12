@@ -17,6 +17,7 @@ import "github.com/bnclabs/golog"
 import "github.com/bnclabs/gostore/api"
 import "github.com/bnclabs/gostore/bogn"
 import "github.com/bmatsuo/lmdb-go/lmdb"
+import "github.com/bmatsuo/lmdb-go/lmdbscan"
 
 func testbogn() error {
 	seedl, seedc := int64(options.seed), int64(options.seed)+100
@@ -955,4 +956,84 @@ func bognsettings(seed int) s.Settings {
 	fmt.Println()
 
 	return setts
+}
+
+func compareBognLmdb(index *bogn.Bogn, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
+	epoch, cmpcount := time.Now(), 0
+
+	//fmt.Println("bogn seqno", index.Getseqno())
+	iter := index.Scan()
+	err := lmdbenv.View(func(txn *lmdb.Txn) error {
+		lmdbs := lmdbscan.New(txn, lmdbdbi)
+		defer lmdbs.Close()
+
+		lmdbs.Scan()
+
+		bognkey, bognval, _, bogndel, bognerr := iter(false /*fin*/)
+		lmdbkey, lmdbval, lmdberr := lmdbs.Key(), lmdbs.Val(), lmdbs.Err()
+
+		for bognkey != nil {
+			if bogndel == false {
+				cmpcount++
+				if bognerr != nil {
+					panic(bognerr)
+				} else if lmdberr != nil {
+					panic(lmdberr)
+				} else if bytes.Compare(bognkey, lmdbkey) != 0 {
+					fmsg := "expected %q,%q, got %q,%q"
+					panic(fmt.Errorf(fmsg, lmdbkey, lmdbval, bognkey, bognval))
+				} else if bytes.Compare(bognval, lmdbval) != 0 {
+					fmsg := "for %q expected %q, got %q"
+					panic(fmt.Errorf(fmsg, bognkey, lmdbval, bognval))
+				}
+				//fmt.Printf("comparebognLmdb %q okay ...\n", llrbkey)
+			}
+
+			lmdbs.Scan()
+			bognkey, bognval, _, bogndel, bognerr = iter(false /*fin*/)
+			lmdbkey, lmdbval, lmdberr = lmdbs.Key(), lmdbs.Val(), lmdbs.Err()
+		}
+		if lmdbkey != nil {
+			return fmt.Errorf("found lmdb key %q\n", lmdbkey)
+		}
+
+		return lmdberr
+	})
+	if err != nil {
+		panic(err)
+	}
+	iter(true /*fin*/)
+
+	took := time.Since(epoch).Round(time.Second)
+	fmt.Printf("Took %v to compare (%v) BOGN and LMDB\n\n", took, cmpcount)
+}
+
+func diskBognLmdb(name, lmdbpath string, seedl int64, bognsetts s.Settings) {
+	if bognsetts.Bool("durable") == false {
+		return
+	}
+
+	fmt.Println("\n.......... Final disk check ..............\n")
+
+	rnd := rand.New(rand.NewSource(seedl))
+	// update settings
+	memstores := []string{"mvcc", "llrb"}
+	bognsetts["memstore"] = memstores[rnd.Intn(len(memstores))]
+	_, _, freemem := getsysmem()
+	capacities := []uint64{freemem, freemem, 10000}
+	bognsetts["llrb.memcapacity"] = capacities[rnd.Intn(len(capacities))]
+	index, err := bogn.New(name /*dbtest*/, bognsetts)
+	if err != nil {
+		panic(err)
+	}
+	index.Start()
+	defer index.Close()
+
+	lmdbenv, lmdbdbi, err := initlmdb(lmdbpath, lmdb.NoSync|lmdb.NoMetaSync)
+	if err != nil {
+		panic(err)
+	}
+	defer lmdbenv.Close()
+
+	compareBognLmdb(index, lmdbenv, lmdbdbi)
 }
