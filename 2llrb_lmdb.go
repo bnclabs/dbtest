@@ -29,7 +29,7 @@ func storellrbindex(index *llrb.LLRB) {
 	atomic.StorePointer(&llrbindex, unsafe.Pointer(index))
 }
 
-func testllrb() error {
+func testllrblmdb() error {
 	seedl, seedc := int64(options.seed), int64(options.seed)+100
 	fmt.Printf("Seed for load: %v, for ops: %v\n\n", seedl, seedc)
 
@@ -52,9 +52,9 @@ func testllrb() error {
 	storellrbindex(index)
 
 	// load index and reference with initial data.
-	dollrbload(lmdbenv, lmdbdbi)
+	dollrblmdbload(lmdbenv, lmdbdbi)
 	// test index and reference read / write
-	dollrbrw(llrbname, llrbsetts, index, lmdbenv, lmdbdbi)
+	dollrblmdbrw(llrbname, llrbsetts, index, lmdbenv, lmdbdbi)
 
 	if llrbold != nil {
 		llrbold.Close()
@@ -72,9 +72,9 @@ func testllrb() error {
 	return nil
 }
 
-func dollrbload(lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
+func dollrblmdbload(lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
 	seedl := int64(options.seed)
-	if err := llrbLoad(seedl); err != nil {
+	if err := llrbLmdbLoad(seedl); err != nil {
 		panic(err)
 	}
 	seqno = 0
@@ -85,7 +85,7 @@ func dollrbload(lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
 	atomic.AddInt64(&totalwrites, -int64(options.load))
 }
 
-func dollrbrw(
+func dollrblmdbrw(
 	llrbname string, llrbsetts s.Settings,
 	index *llrb.LLRB, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
 
@@ -95,20 +95,20 @@ func dollrbrw(
 	fin := make(chan struct{})
 
 	// validator
-	go llrbvalidator(
+	go llrblmdbvalidator(
 		lmdbenv, lmdbdbi, true, seedl, llrbname, llrbsetts, &rwg, fin,
 	)
 	rwg.Add(1)
 	// writer routines
 	n := atomic.LoadInt64(&numentries)
-	go llrbCreater(lmdbenv, lmdbdbi, n, seedc, &wwg)
-	go llrbUpdater(lmdbenv, lmdbdbi, n, seedl, seedc, &wwg)
-	go llrbDeleter(lmdbenv, lmdbdbi, n, seedl, seedc, &wwg)
+	go llrbLmdbCreater(lmdbenv, lmdbdbi, n, seedc, &wwg)
+	go llrbLmdbUpdater(lmdbenv, lmdbdbi, n, seedl, seedc, &wwg)
+	go llrbLmdbDeleter(lmdbenv, lmdbdbi, n, seedl, seedc, &wwg)
 	wwg.Add(3)
 	// reader routines
 	for i := 0; i < options.cpu; i++ {
-		go llrbGetter(lmdbenv, lmdbdbi, n, seedl, seedc, fin, &rwg)
-		go llrbRanger(n, seedl, seedc, fin, &rwg)
+		go llrbLmdbGetter(lmdbenv, lmdbdbi, n, seedl, seedc, fin, &rwg)
+		go llrbLmdbRanger(n, seedl, seedc, fin, &rwg)
 		rwg.Add(2)
 	}
 	wwg.Wait()
@@ -118,7 +118,7 @@ func dollrbrw(
 
 var llrbrw sync.RWMutex
 
-func llrbvalidator(
+func llrblmdbvalidator(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI, log bool, seedl int64,
 	llrbname string, llrbsetts s.Settings,
 	wg *sync.WaitGroup, fin chan struct{}) {
@@ -194,7 +194,7 @@ func llrbvalidator(
 	}
 }
 
-func llrbLoad(seedl int64) error {
+func llrbLmdbLoad(seedl int64) error {
 	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
 
@@ -218,11 +218,11 @@ func llrbLoad(seedl int64) error {
 	return nil
 }
 
-var llrbsets = []func(index *llrb.LLRB, k, v, ov []byte) (uint64, []byte){
-	llrbSet1, llrbSet2, llrbSet3, llrbSet4,
+var llrblmdbsets = []func(index *llrb.LLRB, k, v, ov []byte) (uint64, []byte){
+	llrbLmdbSet1, llrbLmdbSet2, llrbLmdbSet3, llrbLmdbSet4,
 }
 
-func llrbCreater(
+func llrbLmdbCreater(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	n, seedc int64, wg *sync.WaitGroup) {
 
@@ -244,7 +244,7 @@ func llrbCreater(
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
 		setidx := rnd.Intn(1000000) % 4
-		refcas, _ := llrbsets[setidx](index, key, value, oldvalue)
+		refcas, _ := llrblmdbsets[setidx](index, key, value, oldvalue)
 		oldvalue, cas, del, ok := index.Get(key, oldvalue)
 		if ok == false {
 			panic("unexpected false")
@@ -261,7 +261,8 @@ func llrbCreater(
 			count := index.Count()
 			x := time.Since(now).Round(time.Second)
 			y := time.Since(epoch).Round(time.Second)
-			fmsg := "llrbCreated {%v items in %v} {%v items in %v} count:%v\n"
+			fmsg := "llrbLmdbCreated {%v items in %v} {%v items in %v} " +
+				"count:%v\n"
 			fmt.Printf(fmsg, markercount, x, nc, y, count)
 			now = time.Now()
 		}
@@ -278,12 +279,12 @@ func llrbCreater(
 		}
 		runtime.Gosched()
 	}
-	fmsg := "at exit, llrbCreated %v items in %v\n"
+	fmsg := "at exit, llrbLmdbCreated %v items in %v\n"
 	took := time.Since(epoch).Round(time.Second)
 	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), took)
 }
 
-func vllrbupdater(
+func vllrblmdbupdater(
 	key, oldvalue []byte, refcas, cas uint64, i int, del, ok bool) string {
 
 	var err error
@@ -304,7 +305,7 @@ func vllrbupdater(
 	return "ok"
 }
 
-func llrbUpdater(
+func llrbLmdbUpdater(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	n, seedl, seedc int64, wg *sync.WaitGroup) {
 
@@ -328,12 +329,14 @@ func llrbUpdater(
 		key, value = g(key, value, opaque)
 		setidx := rnd.Intn(1000000) % 4
 		for i := 2; i >= 0; i-- {
-			refcas, oldvalue := llrbsets[setidx](index, key, value, oldvalue)
+			set := llrblmdbsets[setidx]
+			refcas, oldvalue := set(index, key, value, oldvalue)
 			if len(oldvalue) == 0 {
 				atomic.AddInt64(&numentries, 1)
 			}
 			oldvalue, cas, del, ok := index.Get(key, oldvalue)
-			if vllrbupdater(key, oldvalue, refcas, cas, i, del, ok) == "ok" {
+			rc := vllrblmdbupdater(key, oldvalue, refcas, cas, i, del, ok)
+			if rc == "ok" {
 				break
 			}
 		}
@@ -343,7 +346,8 @@ func llrbUpdater(
 			count := index.Count()
 			x := time.Since(now).Round(time.Second)
 			y := time.Since(epoch).Round(time.Second)
-			fmsg := "llrbUpdated {%v items in %v} {%v items in %v} count:%v\n"
+			fmsg := "llrbLmdbUpdated {%v items in %v} {%v items in %v} " +
+				"count:%v\n"
 			fmt.Printf(fmsg, markercount, x, nupdates, y, count)
 			now = time.Now()
 		}
@@ -361,12 +365,14 @@ func llrbUpdater(
 		}
 		runtime.Gosched()
 	}
-	fmsg := "at exit, llrbUpdated %v items in %v\n"
+	fmsg := "at exit, llrbLmdbUpdated %v items in %v\n"
 	took := time.Since(epoch).Round(time.Second)
 	fmt.Printf(fmsg, nupdates, took)
 }
 
-func llrbSet1(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
+func llrbLmdbSet1(
+	index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
+
 	oldvalue, cas := index.Set(key, value, oldvalue)
 	//fmt.Printf("update1 %q %q %q \n", key, value, oldvalue)
 	if len(oldvalue) > 0 {
@@ -375,7 +381,7 @@ func llrbSet1(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
 	return cas, oldvalue
 }
 
-func llrbverifyset2(err error, i int, key, oldvalue []byte) string {
+func llrblmdbverifyset2(err error, i int, key, oldvalue []byte) string {
 	if err != nil {
 	} else if len(oldvalue) > 0 {
 		comparekeyvalue(key, oldvalue, options.vallen)
@@ -389,7 +395,9 @@ func llrbverifyset2(err error, i int, key, oldvalue []byte) string {
 	return "ok"
 }
 
-func llrbSet2(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
+func llrbLmdbSet2(
+	index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
+
 	for i := 2; i >= 0; i-- {
 		oldvalue, oldcas, deleted, ok := index.Get(key, oldvalue)
 		if deleted || ok == false {
@@ -403,14 +411,16 @@ func llrbSet2(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
 			panic(fmt.Errorf("unexpected %q", oldvalue))
 		}
 		//fmt.Printf("update2 %q %q %q \n", key, value, oldvalue)
-		if llrbverifyset2(err, i, key, oldvalue) == "ok" {
+		if llrblmdbverifyset2(err, i, key, oldvalue) == "ok" {
 			return cas, oldvalue
 		}
 	}
 	panic("unreachable code")
 }
 
-func llrbSet3(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
+func llrbLmdbSet3(
+	index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
+
 	txn := index.BeginTxn(0xC0FFEE)
 	oldvalue = txn.Set(key, value, oldvalue)
 	//fmt.Printf("update3 %q %q %q \n", key, value, oldvalue)
@@ -423,7 +433,9 @@ func llrbSet3(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
 	return 0, oldvalue
 }
 
-func llrbSet4(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
+func llrbLmdbSet4(
+	index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
+
 	txn := index.BeginTxn(0xC0FFEE)
 	cur, err := txn.OpenCursor(key)
 	if err != nil {
@@ -440,11 +452,11 @@ func llrbSet4(index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
 	return 0, oldvalue
 }
 
-var llrbdels = []func(*llrb.LLRB, []byte, []byte, bool) (uint64, bool){
-	llrbDel1, llrbDel2, llrbDel3, llrbDel4,
+var llrblmdbdels = []func(*llrb.LLRB, []byte, []byte, bool) (uint64, bool){
+	llrbLmdbDel1, llrbLmdbDel2, llrbLmdbDel3, llrbLmdbDel4,
 }
 
-func vllrbdel(
+func vllrblmdbdel(
 	index interface{}, key, oldvalue []byte, refcas uint64,
 	i int, lsm, ok bool) string {
 
@@ -492,7 +504,7 @@ func vllrbdel(
 	return "ok"
 }
 
-func llrbDeleter(
+func llrbLmdbDeleter(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	n, seedl, seedc int64, wg *sync.WaitGroup) {
 
@@ -517,15 +529,16 @@ func llrbDeleter(
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
 		//fmt.Printf("delete %q\n", key)
-		ln := len(llrbdels)
+		ln := len(llrblmdbdels)
 		delidx, lsm := rnd.Intn(1000000)%ln, lsmmap[rnd.Intn(1000000)%2]
 		if lsm {
 			delidx = delidx % 2
 		}
 		for i := 2; i >= 0; i-- {
-			refcas, ok1 := llrbdels[delidx](index, key, value, lsm)
+			refcas, ok1 := llrblmdbdels[delidx](index, key, value, lsm)
 			oldvalue, _, _, ok2 := index.Get(key, oldvalue)
-			if vllrbdel(index, key, oldvalue, refcas, i, lsm, ok2) == "ok" {
+			rc := vllrblmdbdel(index, key, oldvalue, refcas, i, lsm, ok2)
+			if rc == "ok" {
 				if ok1 == false && lsm == false {
 					xdeletes++
 				} else if ok1 == false && lsm == true {
@@ -547,7 +560,8 @@ func llrbDeleter(
 			count := index.Count()
 			x := time.Since(now).Round(time.Second)
 			y := time.Since(epoch).Round(time.Second)
-			fmsg := "llrbDeleted {%v items %v} {%v:%v items in %v} count:%v\n"
+			fmsg := "llrbLmdbDeleted {%v items %v} {%v:%v items in %v} " +
+				"count:%v\n"
 			fmt.Printf(fmsg, markercount, x, ndeletes, xdeletes, y, count)
 			now = time.Now()
 		}
@@ -568,12 +582,14 @@ func llrbDeleter(
 		}
 		runtime.Gosched()
 	}
-	fmsg := "at exit, llrbDeleter %v:%v items in %v\n"
+	fmsg := "at exit, llrbLmdbDeleter %v:%v items in %v\n"
 	took := time.Since(epoch).Round(time.Second)
 	fmt.Printf(fmsg, ndeletes, xdeletes, took)
 }
 
-func llrbDel1(index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
+func llrbLmdbDel1(
+	index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
+
 	var ok bool
 
 	oldval, cas := index.Delete(key, oldval, lsm)
@@ -584,7 +600,9 @@ func llrbDel1(index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
 	return cas, ok
 }
 
-func llrbDel2(index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
+func llrbLmdbDel2(
+	index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
+
 	var ok bool
 
 	txn := index.BeginTxn(0xC0FFEE)
@@ -599,7 +617,9 @@ func llrbDel2(index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
 	return 0, ok
 }
 
-func llrbDel3(index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
+func llrbLmdbDel3(
+	index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
+
 	var ok bool
 
 	txn := index.BeginTxn(0xC0FFEE)
@@ -618,7 +638,9 @@ func llrbDel3(index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
 	return 0, ok
 }
 
-func llrbDel4(index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
+func llrbLmdbDel4(
+	index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
+
 	var ok bool
 
 	txn := index.BeginTxn(0xC0FFEE)
@@ -637,11 +659,11 @@ func llrbDel4(index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
 	return 0, ok
 }
 
-var llrbgets = []func(*lmdb.Env, lmdb.DBI, *llrb.LLRB, []byte, []byte) ([]byte, uint64, bool, bool){
-	llrbGet1, llrbGet2, llrbGet3,
+var llrblmdbgets = []func(*lmdb.Env, lmdb.DBI, *llrb.LLRB, []byte, []byte) ([]byte, uint64, bool, bool){
+	llrbLmdbGet1, llrbLmdbGet2, llrbLmdbGet3,
 }
 
-func llrbGetter(
+func llrbLmdbGetter(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
 
@@ -660,7 +682,7 @@ loop:
 		index := loadllrbindex()
 		ngets++
 		key = g(key, atomic.LoadInt64(&ncreates))
-		get := llrbgets[(rnd.Intn(1000000) % len(llrbgets))]
+		get := llrblmdbgets[(rnd.Intn(1000000) % len(llrblmdbgets))]
 		value, _, del, _ = get(lmdbenv, lmdbdbi, index, key, value)
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
@@ -683,7 +705,7 @@ loop:
 		if ngm := ngets + nmisses; ngm%markercount == 0 {
 			x := time.Since(now).Round(time.Second)
 			y := time.Since(epoch).Round(time.Second)
-			fmsg := "llrbGetter {%v items in %v} {%v:%v items in %v}\n"
+			fmsg := "llrbLmdbGetter {%v items in %v} {%v:%v items in %v}\n"
 			fmt.Printf(fmsg, markercount, x, ngets, nmisses, y)
 		}
 
@@ -691,11 +713,11 @@ loop:
 	}
 	took := time.Since(epoch).Round(time.Second)
 	<-fin
-	fmsg := "at exit, llrbGetter %v:%v items in %v\n"
+	fmsg := "at exit, llrbLmdbGetter %v:%v items in %v\n"
 	fmt.Printf(fmsg, ngets, nmisses, took)
 }
 
-func llrbGet1(
+func llrbLmdbGet1(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
 
@@ -716,7 +738,7 @@ func llrbGet1(
 	return llrbval, seqno, del, ok
 }
 
-func llrbGet2(
+func llrbLmdbGet2(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
 
@@ -758,7 +780,7 @@ func llrbGet2(
 	return llrbval, 0, del, ok
 }
 
-func llrbGet3(
+func llrbLmdbGet3(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
 
@@ -800,11 +822,11 @@ func llrbGet3(
 	return llrbval, 0, del, ok
 }
 
-var llrbrngs = []func(index *llrb.LLRB, key, val []byte) int64{
-	llrbRange1, llrbRange2, llrbRange3, llrbRange4,
+var llrblmdbrngs = []func(index *llrb.LLRB, key, val []byte) int64{
+	llrbLmdbRange1, llrbLmdbRange2, llrbLmdbRange3, llrbLmdbRange4,
 }
 
-func llrbRanger(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
+func llrbLmdbRanger(n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	var nranges int64
@@ -817,8 +839,8 @@ loop:
 	for {
 		index := loadllrbindex()
 		key = g(key, atomic.LoadInt64(&ncreates))
-		ln := len(llrbrngs)
-		n := llrbrngs[rnd.Intn(1000000)%ln](index, key, value)
+		ln := len(llrblmdbrngs)
+		n := llrblmdbrngs[rnd.Intn(1000000)%ln](index, key, value)
 		nranges += n
 		select {
 		case <-fin:
@@ -829,11 +851,10 @@ loop:
 	}
 	took := time.Since(epoch).Round(time.Second)
 	<-fin
-	fmt.Printf("at exit, llrbRanger %v items in %v\n", nranges, took)
+	fmt.Printf("at exit, llrbLmdbRanger %v items in %v\n", nranges, took)
 }
 
-func llrbRange1(index *llrb.LLRB, key, value []byte) (n int64) {
-	//fmt.Printf("llrbRange1 %q\n", key)
+func llrbLmdbRange1(index *llrb.LLRB, key, value []byte) (n int64) {
 	txn := index.BeginTxn(0xC0FFEE)
 	cur, err := txn.OpenCursor(key)
 	if err != nil {
@@ -857,7 +878,7 @@ func llrbRange1(index *llrb.LLRB, key, value []byte) (n int64) {
 	return
 }
 
-func llrbRange2(index *llrb.LLRB, key, value []byte) (n int64) {
+func llrbLmdbRange2(index *llrb.LLRB, key, value []byte) (n int64) {
 	txn := index.BeginTxn(0xC0FFEE)
 	cur, err := txn.OpenCursor(key)
 	if err != nil {
@@ -883,7 +904,7 @@ func llrbRange2(index *llrb.LLRB, key, value []byte) (n int64) {
 	return
 }
 
-func llrbRange3(index *llrb.LLRB, key, value []byte) (n int64) {
+func llrbLmdbRange3(index *llrb.LLRB, key, value []byte) (n int64) {
 	view := index.View(0x1236)
 	cur, err := view.OpenCursor(key)
 	if err != nil {
@@ -909,7 +930,7 @@ func llrbRange3(index *llrb.LLRB, key, value []byte) (n int64) {
 	return
 }
 
-func llrbRange4(index *llrb.LLRB, key, value []byte) (n int64) {
+func llrbLmdbRange4(index *llrb.LLRB, key, value []byte) (n int64) {
 	view := index.View(0x1237)
 	cur, err := view.OpenCursor(key)
 	if err != nil {
