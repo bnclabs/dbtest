@@ -299,7 +299,7 @@ func (t *TestLLRB) lmdbvalidator(
 		}
 	}()
 
-	tick := time.NewTicker(100 * time.Second)
+	tick := time.NewTicker(10 * time.Second)
 	for {
 		select {
 		case <-tick.C:
@@ -371,7 +371,7 @@ func (t *TestLLRB) badgvalidator(
 		}
 	}()
 
-	tick := time.NewTicker(100 * time.Second)
+	tick := time.NewTicker(10 * time.Second)
 	for {
 		select {
 		case <-tick.C:
@@ -409,7 +409,7 @@ func (t *TestLLRB) lmdbCreater(
 		key, value = g(key, value, opaque)
 		set := sets[rnd.Intn(1000000)%4]
 		refcas, _ := set(index, key, value, oldvalue)
-		oldvalue, cas, del, ok := index.Get(key, oldvalue)
+		oldvalue, cas, del, ok := index.Get(key, oldvalue[:0])
 		if ok == false {
 			panic("unexpected false")
 		} else if del == true {
@@ -1277,8 +1277,8 @@ func (t *TestLLRB) badgGet1(
 
 	get := func(txn *badger.Txn) error {
 		item, _ := txn.Get(key)
-		badgval, _ := item.Value()
-		if del == false && options.vallen > 0 {
+		if del == false && options.vallen > 0 && item != nil {
+			badgval, _ := item.Value()
 			if bytes.Compare(llrbval, badgval) != 0 {
 				fmsg := "retry: expected %q, got %q"
 				return fmt.Errorf(fmsg, badgval, llrbval)
@@ -1304,8 +1304,8 @@ func (t *TestLLRB) badgGet2(
 		llrbval, _, del, ok = llrbtxn.Get(key, value)
 
 		item, err := txn.Get(key)
-		badgval, _ := item.Value()
-		if del == false && options.vallen > 0 {
+		if del == false && options.vallen > 0 && item != nil {
+			badgval, _ := item.Value()
 			if bytes.Compare(llrbval, badgval) != 0 {
 				llrbtxn.Abort()
 				fmsg := "retry: expected %q, got %q"
@@ -1347,8 +1347,8 @@ func (t *TestLLRB) badgGet3(
 		llrbval, _, del, ok = view.Get(key, value)
 
 		item, err := txn.Get(key)
-		badgval, _ := item.Value()
-		if del == false && options.vallen > 0 {
+		if del == false && options.vallen > 0 && item != nil {
+			badgval, _ := item.Value()
 			if bytes.Compare(llrbval, badgval) != 0 {
 				view.Abort()
 				fmsg := "retry: expected %q, got %q"
@@ -1561,16 +1561,14 @@ func compareLlrbLmdb(index *llrb.LLRB, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
 					panic("error")
 				}
 				//fmt.Printf("compareLlrbLmdb %q okay ...\n", llrbkey)
+				lmdbkey, lmdbval, lmdberr = lmdbcur.Get(nil, nil, lmdb.Next)
 			}
-
 			llrbkey, llrbval, _, llrbdel, llrberr = iter(false /*fin*/)
-			lmdbkey, lmdbval, lmdberr = lmdbcur.Get(nil, nil, lmdb.Next)
 		}
 		if lmdbkey != nil {
 			return fmt.Errorf("found lmdb key %q\n", lmdbkey)
 		}
-
-		return lmdberr
+		return nil
 	})
 	if err != nil {
 		panic(err)
@@ -1618,8 +1616,8 @@ func compareLlrbBadger(index *llrb.LLRB, badg *badger.DB) {
 					fmt.Printf(fmsg, llrbkey, badgval, llrbval)
 					panic("error")
 				}
+				it.Next()
 			}
-			it.Next()
 		}
 		llrbkey, _, _, _, llrberr := iter(false /*fin*/)
 		if llrberr != io.EOF {
