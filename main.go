@@ -71,6 +71,8 @@ func main() {
 	switch options.db {
 	case "lmdb":
 		testlmdb()
+	case "badger":
+		testbadger()
 	case "llrb":
 		testllrb()
 	case "mvcc":
