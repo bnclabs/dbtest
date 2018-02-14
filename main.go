@@ -15,6 +15,7 @@ import "github.com/cloudfoundry/gosigar"
 
 var options struct {
 	db       string
+	ref      string
 	cpu      int
 	load     int
 	writes   int
@@ -37,7 +38,9 @@ func optparse(args []string) {
 	}
 	_, _, freeram := getsysmem()
 
-	f.StringVar(&options.db, "db", "llrb", "lmdb|llrb|mvcc|bubt|bogn store type")
+	f.StringVar(&options.db, "db", "llrb",
+		"lmdb|badger|llrb|mvcc|bubt|bogn store type")
+	f.StringVar(&options.ref, "ref", "lmdb", "lmdb|badger store type")
 	f.IntVar(&options.cpu, "cpu", cpu, "lmdb|llrb|mvcc|bubt|bogn store type")
 	f.IntVar(&options.load, "load", 1000000, "number of entries to load initially")
 	f.IntVar(&options.writes, "writes", 10000000, "total number of writes")
@@ -68,18 +71,19 @@ func main() {
 		log.Infof("%v", http.ListenAndServe("localhost:6060", nil))
 	}()
 
-	switch options.db {
-	case "lmdb":
+	if options.db == "lmdb" {
 		testlmdb()
-	case "badger":
+	} else if options.db == "badger" {
 		testbadger()
-	case "llrb":
-		testllrb()
-	case "mvcc":
+	} else if options.db == "llrb" && options.ref == "lmdb" {
+		(&TestLLRB{}).llrbwithlmdb()
+		//} else if options.db == "llrb" && options.ref == "badger" {
+		//	testllrbbadger()
+	} else if options.db == "mvcc" {
 		testmvcc()
-	case "bubt":
+	} else if options.db == "bubt" {
 		testbubt()
-	case "bogn":
+	} else if options.db == "bogn" {
 		testbogn()
 	}
 }

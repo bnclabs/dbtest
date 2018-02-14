@@ -5,6 +5,7 @@ import "fmt"
 import "sync"
 import "time"
 import "strings"
+import "runtime"
 import "strconv"
 import "path/filepath"
 import "sync/atomic"
@@ -22,31 +23,31 @@ func testbadger() error {
 	}()
 	fmt.Printf("BADGER path %q\n", pathdir)
 
-	db, err := initbadger(pathdir)
+	badg, err := initbadger(pathdir)
 	if err != nil {
 		panic(err)
 	}
-	defer db.Close()
+	defer badg.Close()
 
 	klen, vlen := int64(options.keylen), int64(options.vallen)
 	loadn := int64(options.load)
 	seedl, seedc := int64(options.seed), int64(options.seed)+100
 	fmt.Printf("Seed for load: %v, for ops: %v\n", seedl, seedc)
-	if err = badgerload(db, klen, vlen, loadn, seedl); err != nil {
+	if err = badgerload(badg, klen, vlen, loadn, seedl); err != nil {
 		return err
 	}
 
 	var wwg, rwg sync.WaitGroup
 	// writer routines
-	go badgerCreater(db, loadn, klen, vlen, seedc, &wwg)
-	go badgerUpdater(db, loadn, klen, vlen, seedl, seedc, &wwg)
-	go badgerDeleter(db, loadn, klen, vlen, seedl, seedc, &wwg)
+	go badgerCreater(badg, loadn, klen, vlen, seedc, &wwg)
+	go badgerUpdater(badg, loadn, klen, vlen, seedl, seedc, &wwg)
+	go badgerDeleter(badg, loadn, klen, vlen, seedl, seedc, &wwg)
 	wwg.Add(3)
 	// reader routines
 	fin := make(chan struct{})
 	for i := 0; i < options.cpu; i++ {
-		go badgerGetter(db, loadn, klen, vlen, seedl, seedc, fin, &rwg)
-		go badgerRanger(db, loadn, klen, vlen, seedl, seedc, fin, &rwg)
+		go badgerGetter(badg, loadn, klen, vlen, seedl, seedc, fin, &rwg)
+		go badgerRanger(badg, loadn, klen, vlen, seedl, seedc, fin, &rwg)
 		rwg.Add(2)
 	}
 	wwg.Wait()
@@ -60,15 +61,15 @@ func testbadger() error {
 	return nil
 }
 
-func initbadger(pathdir string) (db *badger.DB, err error) {
+func initbadger(pathdir string) (badg *badger.DB, err error) {
 	opts := badger.DefaultOptions
 	opts.Dir, opts.ValueDir = pathdir, pathdir
-	db, err = badger.Open(opts)
+	badg, err = badger.Open(opts)
 	if err != nil {
 		fmt.Printf("badger.Open(): %v\n", err)
 		return nil, err
 	}
-	return db, nil
+	return badg, nil
 }
 
 type badgerop struct {
@@ -77,7 +78,7 @@ type badgerop struct {
 	value []byte
 }
 
-func badgerload(db *badger.DB, klen, vlen, loadn, seedl int64) error {
+func badgerload(badg *badger.DB, klen, vlen, loadn, seedl int64) error {
 	g, count := Generateloadr(klen, vlen, loadn, seedl), int64(0)
 
 	cmds := make([]*badgerop, 10000)
@@ -100,7 +101,7 @@ func badgerload(db *badger.DB, klen, vlen, loadn, seedl int64) error {
 	cmd.key, cmd.value = g(cmd.key, cmd.value, opaque)
 	for off = 1; cmd.key != nil; off++ {
 		if off == len(cmds) {
-			if err := db.Update(populate); err != nil {
+			if err := badg.Update(populate); err != nil {
 				panic(err)
 			}
 			off = 0
@@ -119,11 +120,11 @@ func badgerload(db *badger.DB, klen, vlen, loadn, seedl int64) error {
 	return nil
 }
 
-var badgerconflict = "Transaction Conflict"
-var badgerkeymissing = "Key not found"
+var badgconflict = "Transaction Conflict"
+var badgkeymissing = "Key not found"
 
 func badgerCreater(
-	db *badger.DB, loadn, klen, vlen, seedc int64, wg *sync.WaitGroup) {
+	badg *badger.DB, loadn, klen, vlen, seedc int64, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
@@ -135,7 +136,7 @@ func badgerCreater(
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
-		if err := badgerDocreate(db, key, value); err != nil {
+		if err := badgDocreate(badg, key, value); err != nil {
 			return
 		}
 		atomic.AddInt64(&numentries, 1)
@@ -153,7 +154,7 @@ func badgerCreater(
 	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), took)
 }
 
-func badgerDocreate(db *badger.DB, key, value []byte) (err error) {
+func badgDocreate(badg *badger.DB, key, value []byte) (err error) {
 	put := func(txn *badger.Txn) (err error) {
 		if err := txn.Set(key, value); err != nil {
 			return err
@@ -161,9 +162,9 @@ func badgerDocreate(db *badger.DB, key, value []byte) (err error) {
 		return nil
 	}
 	for i := 0; i < 10; i++ {
-		if err = db.Update(put); err == nil {
+		if err = badg.Update(put); err == nil {
 			return
-		} else if strings.Contains(err.Error(), badgerconflict) {
+		} else if strings.Contains(err.Error(), badgconflict) {
 			atomic.AddInt64(&conflicts, 1)
 			continue
 		} else {
@@ -174,7 +175,7 @@ func badgerDocreate(db *badger.DB, key, value []byte) (err error) {
 }
 
 func badgerUpdater(
-	db *badger.DB,
+	badg *badger.DB,
 	loadn, klen, vlen, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	defer wg.Done()
@@ -188,7 +189,7 @@ func badgerUpdater(
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
-		if new, err := badgerDoupdate(db, key, value); err != nil {
+		if new, err := badgDoupdate(badg, key, value); err != nil {
 			return
 		} else if new {
 			atomic.AddInt64(&numentries, 1)
@@ -207,19 +208,19 @@ func badgerUpdater(
 	fmt.Printf(fmsg, nupdates, took)
 }
 
-func badgerDoupdate(db *badger.DB, key, value []byte) (new bool, err error) {
+func badgDoupdate(badg *badger.DB, key, value []byte) (new bool, err error) {
 	update := func(txn *badger.Txn) (err error) {
 		_, err = txn.Get(key)
-		new = err != nil && strings.Contains(err.Error(), badgerkeymissing)
+		new = err != nil && strings.Contains(err.Error(), badgkeymissing)
 		if err := txn.Set(key, value); err != nil {
 			return err
 		}
 		return nil
 	}
 	for i := 0; i < 10; i++ {
-		if err = db.Update(update); err == nil {
+		if err = badg.Update(update); err == nil {
 			return
-		} else if strings.Contains(err.Error(), badgerconflict) {
+		} else if strings.Contains(err.Error(), badgconflict) {
 			atomic.AddInt64(&conflicts, 1)
 			continue
 		} else {
@@ -231,7 +232,7 @@ func badgerDoupdate(db *badger.DB, key, value []byte) (new bool, err error) {
 }
 
 func badgerDeleter(
-	db *badger.DB,
+	badg *badger.DB,
 	loadn, klen, vlen, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	defer wg.Done()
@@ -245,7 +246,7 @@ func badgerDeleter(
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
-		if x, err := badgerDodelete(db, key, value); err != nil {
+		if x, err := badgDodelete(badg, key, value); err != nil {
 			return
 		} else if x {
 			xdeletes++
@@ -267,7 +268,7 @@ func badgerDeleter(
 	fmt.Printf(fmsg, ndeletes, xdeletes, took)
 }
 
-func badgerDodelete(db *badger.DB, key, value []byte) (x bool, err error) {
+func badgDodelete(badg *badger.DB, key, value []byte) (x bool, err error) {
 	delete := func(txn *badger.Txn) (err error) {
 		if err := txn.Delete(key); err != nil {
 			return err
@@ -276,12 +277,12 @@ func badgerDodelete(db *badger.DB, key, value []byte) (x bool, err error) {
 	}
 
 	for i := 0; i < 10; i++ {
-		if err = db.Update(delete); err == nil {
+		if err = badg.Update(delete); err == nil {
 			return false, nil
-		} else if strings.Contains(err.Error(), badgerconflict) {
+		} else if strings.Contains(err.Error(), badgconflict) {
 			atomic.AddInt64(&conflicts, 1)
 			continue
-		} else if strings.Contains(err.Error(), badgerconflict) {
+		} else if strings.Contains(err.Error(), badgconflict) {
 			return true, nil
 		} else {
 			log.Errorf("key %q err : %v", key, err)
@@ -292,7 +293,7 @@ func badgerDodelete(db *badger.DB, key, value []byte) (x bool, err error) {
 }
 
 func badgerGetter(
-	db *badger.DB, loadn, klen, vlen, seedl, seedc int64,
+	badg *badger.DB, loadn, klen, vlen, seedl, seedc int64,
 	fin chan struct{}, wg *sync.WaitGroup) {
 
 	defer wg.Done()
@@ -328,7 +329,7 @@ func badgerGetter(
 loop:
 	for {
 		key = g(key, atomic.LoadInt64(&ncreates))
-		if err := db.View(get); err != nil {
+		if err := badg.View(get); err != nil {
 			log.Errorf("%q err: %v", key, err)
 			break loop
 		}
@@ -352,7 +353,7 @@ loop:
 }
 
 func badgerRanger(
-	db *badger.DB, loadn, klen, vlen, seedl, seedc int64,
+	badg *badger.DB, loadn, klen, vlen, seedl, seedc int64,
 	fin chan struct{}, wg *sync.WaitGroup) {
 
 	defer wg.Done()
@@ -394,7 +395,7 @@ func badgerRanger(
 loop:
 	for {
 		key = g(key, atomic.LoadInt64(&ncreates))
-		if err := db.View(ranger); err != nil {
+		if err := badg.View(ranger); err != nil {
 			log.Errorf("%q err: %v", key, err)
 			break loop
 		}
@@ -416,4 +417,22 @@ func badgerpath() string {
 		panic(err)
 	}
 	return path
+}
+
+func trybadgget(badg *badger.DB, repeat int, get func(*badger.Txn) error) {
+	for i := 0; i < repeat; i++ {
+		if err := badg.View(get); err == nil {
+			break
+
+		} else if strings.Contains(err.Error(), "retry") {
+			if i == (repeat - 1) {
+				panic(err)
+			}
+
+		} else {
+			panic(err)
+		}
+		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
+		runtime.Gosched()
+	}
 }
