@@ -304,7 +304,7 @@ func (t *TestMVCC) lmdbvalidator(
 		}
 	}()
 
-	tick := time.NewTicker(25 * time.Second)
+	tick := time.NewTicker(60 * time.Second)
 	for {
 		select {
 		case <-tick.C:
@@ -377,7 +377,7 @@ func (t *TestMVCC) badgvalidator(
 		}
 	}()
 
-	tick := time.NewTicker(10 * time.Second)
+	tick := time.NewTicker(60 * time.Second)
 	for {
 		select {
 		case <-tick.C:
