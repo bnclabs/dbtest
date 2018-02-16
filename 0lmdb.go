@@ -215,6 +215,7 @@ func lmdbCreater(
 }
 
 func lmdbDocreate(env *lmdb.Env, dbi lmdb.DBI, key, value []byte) error {
+	//fmt.Printf("create %q %q\n", key, value)
 	put := func(txn *lmdb.Txn) (err error) {
 		//if "00000000000000000000000000699067" == string(key) {
 		//	fmt.Println("create", string(key))
@@ -267,6 +268,7 @@ func lmdbUpdater(
 func lmdbDoupdate(
 	env *lmdb.Env, dbi lmdb.DBI, key, value []byte) (new bool, err error) {
 
+	//fmt.Printf("update %q %q\n", key, value)
 	update := func(txn *lmdb.Txn) (err error) {
 		_, err = txn.Get(dbi, key)
 		new = err != nil && strings.Contains(err.Error(), lmdbmissingerr)
@@ -321,6 +323,7 @@ func lmdbDeleter(
 func lmdbDodelete(
 	env *lmdb.Env, dbi lmdb.DBI, key, value []byte) (x bool, err error) {
 
+	//fmt.Printf("delete %q %q\n", key, value)
 	delete := func(txn *lmdb.Txn) (err error) {
 		if err := txn.Del(dbi, key, nil); err != nil {
 			return err

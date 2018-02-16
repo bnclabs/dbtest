@@ -79,8 +79,10 @@ func main() {
 		(&TestLLRB{}).llrbwithlmdb()
 	} else if options.db == "llrb" && options.ref == "badger" {
 		(&TestLLRB{}).llrbwithbadg()
-	} else if options.db == "mvcc" {
-		testmvcc()
+	} else if options.db == "mvcc" && options.ref == "lmdb" {
+		(&TestMVCC{}).mvccwithlmdb()
+	} else if options.db == "mvcc" && options.ref == "badg" {
+		(&TestMVCC{}).mvccwithbadg()
 	} else if options.db == "bubt" {
 		testbubt()
 	} else if options.db == "bogn" {

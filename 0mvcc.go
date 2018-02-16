@@ -6,37 +6,38 @@ import "fmt"
 import "sync"
 import "time"
 import "bytes"
-import "unsafe"
-import "runtime"
-import "strings"
 import "strconv"
+import "strings"
+import "runtime"
+import "unsafe"
 import "sync/atomic"
 import "math/rand"
 
 import "github.com/bnclabs/golog"
 import s "github.com/bnclabs/gosettings"
-import "github.com/bnclabs/gostore/api"
 import "github.com/bnclabs/gostore/llrb"
+import "github.com/bnclabs/gostore/api"
 import "github.com/bmatsuo/lmdb-go/lmdb"
 import "github.com/dgraph-io/badger"
 
-type TestLLRB struct {
-	old    *llrb.LLRB
-	index  unsafe.Pointer // *llrb.LLRB
-	llrbrw sync.RWMutex
+type TestMVCC struct {
+	old    *llrb.MVCC
+	index  unsafe.Pointer // *llrb.MVCC
+	mvccrw sync.RWMutex
 }
 
-func (t *TestLLRB) loadindex() *llrb.LLRB {
-	return (*llrb.LLRB)(atomic.LoadPointer(&t.index))
+func (t *TestMVCC) loadindex() *llrb.MVCC {
+	return (*llrb.MVCC)(atomic.LoadPointer(&t.index))
 }
-func (t *TestLLRB) storeindex(index *llrb.LLRB) {
+func (t *TestMVCC) storeindex(index *llrb.MVCC) {
 	atomic.StorePointer(&t.index, unsafe.Pointer(index))
 }
 
-func (t *TestLLRB) llrbwithlmdb() error {
+func (t *TestMVCC) mvccwithlmdb() error {
 	seedl, seedc := int64(options.seed), int64(options.seed)+100
 	fmt.Printf("Seed for load: %v, for ops: %v\n\n", seedl, seedc)
 
+	// LMDB instance
 	lmdbpath := makelmdbpath()
 	defer func() {
 		if err := os.RemoveAll(lmdbpath); err != nil {
@@ -50,15 +51,18 @@ func (t *TestLLRB) llrbwithlmdb() error {
 		return err
 	}
 	defer lmdbenv.Close()
-	// new llrb instance.
-	llrbname, llrbsetts := "dbtest", llrb.Defaultsettings()
-	index := llrb.NewLLRB(llrbname, llrbsetts)
+	// new mvcc instance.
+	mvccname, mvccsetts := "dbtest", llrb.Defaultsettings()
+	index := llrb.NewMVCC("dbtest", mvccsetts)
 	t.storeindex(index)
 
 	// load index and reference with initial data.
 	t.lmdbload(lmdbenv, lmdbdbi)
 	// test index and reference read / write
-	t.lmdbrw(llrbname, llrbsetts, index, lmdbenv, lmdbdbi)
+	t.lmdbrw(mvccname, mvccsetts, index, lmdbenv, lmdbdbi)
+
+	index.Log()
+	index.Validate()
 
 	if t.old != nil {
 		t.old.Close()
@@ -69,14 +73,15 @@ func (t *TestLLRB) llrbwithlmdb() error {
 		index.Destroy()
 	}
 
+	fmt.Printf("Number of ROLLBACKS: %v\n", rollbacks)
+	fmt.Printf("Number of conflicts: %v\n", conflicts)
 	count, n := index.Count(), atomic.LoadInt64(&numentries)
-	fmt.Printf("LLRB write conflicts %v\n", conflicts)
-	fmt.Printf("LLRB total indexed %v items, expected %v\n", count, n)
+	fmt.Printf("MVCC total indexed %v items, expected %v\n", count, n)
 
 	return nil
 }
 
-func (t *TestLLRB) llrbwithbadg() error {
+func (t *TestMVCC) mvccwithbadg() error {
 	seedl, seedc := int64(options.seed), int64(options.seed)+100
 	fmt.Printf("Seed for load: %v, for ops: %v\n\n", seedl, seedc)
 
@@ -95,9 +100,9 @@ func (t *TestLLRB) llrbwithbadg() error {
 	}
 	defer badg.Close()
 
-	// new llrb instance.
-	llrbname, llrbsetts := "dbtest", llrb.Defaultsettings()
-	index := llrb.NewLLRB(llrbname, llrbsetts)
+	// new mvcc instance.
+	mvccname, mvccsetts := "dbtest", llrb.Defaultsettings()
+	index := llrb.NewMVCC(mvccname, mvccsetts)
 	t.storeindex(index)
 
 	// load index and reference with initial data.
@@ -105,7 +110,7 @@ func (t *TestLLRB) llrbwithbadg() error {
 	loadn := int64(options.load)
 	t.badgload(badg, klen, vlen, loadn, seedl)
 	// test index and reference read / write
-	t.badgrw(llrbname, llrbsetts, index, badg)
+	t.badgrw(mvccname, mvccsetts, index, badg)
 
 	if t.old != nil {
 		t.old.Close()
@@ -117,15 +122,15 @@ func (t *TestLLRB) llrbwithbadg() error {
 	}
 
 	count, n := index.Count(), atomic.LoadInt64(&numentries)
-	fmt.Printf("LLRB write conflicts %v\n", conflicts)
-	fmt.Printf("LLRB total indexed %v items, expected %v\n", count, n)
+	fmt.Printf("MVCC write conflicts %v\n", conflicts)
+	fmt.Printf("MVCC total indexed %v items, expected %v\n", count, n)
 
 	return nil
 }
 
-func (t *TestLLRB) lmdbload(lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
+func (t *TestMVCC) lmdbload(lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
 	seedl := int64(options.seed)
-	if err := t.llrbload(seedl); err != nil {
+	if err := t.mvccload(seedl); err != nil {
 		panic(err)
 	}
 	seqno = 0
@@ -136,8 +141,8 @@ func (t *TestLLRB) lmdbload(lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
 	atomic.AddInt64(&totalwrites, -int64(options.load))
 }
 
-func (t *TestLLRB) badgload(badg *badger.DB, klen, vlen, loadn, seedl int64) {
-	if err := t.llrbload(seedl); err != nil {
+func (t *TestMVCC) badgload(badg *badger.DB, klen, vlen, loadn, seedl int64) {
+	if err := t.mvccload(seedl); err != nil {
 		panic(err)
 	}
 	seqno = 0
@@ -148,49 +153,51 @@ func (t *TestLLRB) badgload(badg *badger.DB, klen, vlen, loadn, seedl int64) {
 	atomic.AddInt64(&totalwrites, -int64(options.load))
 }
 
-func (t *TestLLRB) llrbload(seedl int64) error {
+func (t *TestMVCC) mvccload(seedl int64) error {
 	klen, vlen := int64(options.keylen), int64(options.vallen)
 	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
 
 	now, oldvalue := time.Now(), make([]byte, 16)
 	opaque := atomic.AddUint64(&seqno, 1)
 	key, value := g(make([]byte, 16), make([]byte, 16), opaque)
-	for ; key != nil; key, value = g(key, value, opaque) {
+	for key != nil {
 		index := t.loadindex()
 		oldvalue, _ := index.Set(key, value, oldvalue)
 		if len(oldvalue) > 0 {
 			panic(fmt.Errorf("unexpected %q", oldvalue))
 		}
 		opaque = atomic.AddUint64(&seqno, 1)
+		key, value = g(key, value, opaque)
 	}
 	atomic.AddInt64(&numentries, int64(options.load))
 	atomic.AddInt64(&totalwrites, int64(options.load))
 
 	index := t.loadindex()
 	took := time.Since(now).Round(time.Second)
-	fmt.Printf("Loaded LLRB %v items in %v\n\n", index.Count(), took)
+	fmt.Printf("Loaded MVCC %v items in %v\n\n", index.Count(), took)
 	return nil
 }
 
-func (t *TestLLRB) lmdbrw(
-	llrbname string, llrbsetts s.Settings,
-	index *llrb.LLRB, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
+func (t *TestMVCC) lmdbrw(
+	mvccname string, mvccsetts s.Settings,
+	index *llrb.MVCC, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
 
 	seedl, seedc := int64(options.seed), int64(options.seed)+100
 
 	var wwg, rwg sync.WaitGroup
 	fin := make(chan struct{})
 
-	// validator
 	go t.lmdbvalidator(
-		lmdbenv, lmdbdbi, true, seedl, llrbname, llrbsetts, &rwg, fin,
+		lmdbenv, lmdbdbi, true, seedl, mvccname, mvccsetts, &rwg, fin,
 	)
 	rwg.Add(1)
+
 	// writer routines
 	n := atomic.LoadInt64(&numentries)
 	go t.lmdbCreater(lmdbenv, lmdbdbi, n, seedc, &wwg)
 	go t.lmdbUpdater(lmdbenv, lmdbdbi, n, seedl, seedc, &wwg)
 	go t.lmdbDeleter(lmdbenv, lmdbdbi, n, seedl, seedc, &wwg)
+	//go t.lmdbSidechan(lmdbenv, lmdbdbi, n, seedl, seedc, &wwg)
 	wwg.Add(3)
 	// reader routines
 	for i := 0; i < options.cpu; i++ {
@@ -203,9 +210,9 @@ func (t *TestLLRB) lmdbrw(
 	rwg.Wait()
 }
 
-func (t *TestLLRB) badgrw(
-	llrbname string, llrbsetts s.Settings,
-	index *llrb.LLRB, badg *badger.DB) {
+func (t *TestMVCC) badgrw(
+	mvccname string, mvccsetts s.Settings,
+	index *llrb.MVCC, badg *badger.DB) {
 
 	seedl, seedc := int64(options.seed), int64(options.seed)+100
 
@@ -214,7 +221,7 @@ func (t *TestLLRB) badgrw(
 
 	// validator
 	go t.badgvalidator(
-		badg, true, seedl, llrbname, llrbsetts, &rwg, fin,
+		badg, true, seedl, mvccname, mvccsetts, &rwg, fin,
 	)
 	rwg.Add(1)
 	// writer routines
@@ -234,24 +241,24 @@ func (t *TestLLRB) badgrw(
 	rwg.Wait()
 }
 
-func (t *TestLLRB) lmdbvalidator(
+func (t *TestMVCC) lmdbvalidator(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI, log bool, seedl int64,
-	llrbname string, llrbsetts s.Settings,
+	mvccname string, mvccsetts s.Settings,
 	wg *sync.WaitGroup, fin chan struct{}) {
 
 	defer wg.Done()
 
 	rnd := rand.New(rand.NewSource(seedl))
 
-	loadllrb := func(index *llrb.LLRB) *llrb.LLRB {
+	loadmvcc := func(index *llrb.MVCC) *llrb.MVCC {
 		now := time.Now()
 		iter := index.Scan()
-		newindex := llrb.LoadLLRB(llrbname, llrbsetts, iter)
+		newindex := llrb.LoadMVCC(mvccname, mvccsetts, iter)
 		iter(true /*fin*/)
 		t.storeindex(newindex)
 		thisseqno := index.Getseqno()
 		newindex.Setseqno(thisseqno)
-		fmsg := "Took %v to LoadLLRB index @ %v \n\n"
+		fmsg := "Took %v to LoadMVCC index @ %v \n\n"
 		took := time.Since(now).Round(time.Second)
 		fmt.Printf(fmsg, took, thisseqno)
 
@@ -266,9 +273,6 @@ func (t *TestLLRB) lmdbvalidator(
 
 	do := func() {
 		index := t.loadindex()
-		if err := lmdbenv.Sync(true /*force*/); err != nil {
-			panic(err)
-		}
 
 		if log {
 			fmt.Println()
@@ -281,12 +285,13 @@ func (t *TestLLRB) lmdbvalidator(
 		fmt.Printf("Took %v to validate index\n\n", took)
 
 		func() {
-			t.llrbrw.Lock()
-			defer t.llrbrw.Unlock()
+			t.mvccrw.Lock()
+			defer t.mvccrw.Unlock()
 
-			compareLlrbLmdb(index, lmdbenv, lmdbdbi)
+			syncsleep(mvccsetts)
+			compareMvccLmdb(index, lmdbenv, lmdbdbi)
 			if (rnd.Intn(100000) % 3) == 0 {
-				loadllrb(index)
+				loadmvcc(index)
 			}
 		}()
 	}
@@ -299,7 +304,7 @@ func (t *TestLLRB) lmdbvalidator(
 		}
 	}()
 
-	tick := time.NewTicker(10 * time.Second)
+	tick := time.NewTicker(25 * time.Second)
 	for {
 		select {
 		case <-tick.C:
@@ -310,24 +315,24 @@ func (t *TestLLRB) lmdbvalidator(
 	}
 }
 
-func (t *TestLLRB) badgvalidator(
+func (t *TestMVCC) badgvalidator(
 	badg *badger.DB, log bool, seedl int64,
-	llrbname string, llrbsetts s.Settings,
+	mvccname string, mvccsetts s.Settings,
 	wg *sync.WaitGroup, fin chan struct{}) {
 
 	defer wg.Done()
 
 	rnd := rand.New(rand.NewSource(seedl))
 
-	loadllrb := func(index *llrb.LLRB) *llrb.LLRB {
+	loadmvcc := func(index *llrb.MVCC) *llrb.MVCC {
 		now := time.Now()
 		iter := index.Scan()
-		newindex := llrb.LoadLLRB(llrbname, llrbsetts, iter)
+		newindex := llrb.LoadMVCC(mvccname, mvccsetts, iter)
 		iter(true /*fin*/)
 		t.storeindex(newindex)
 		thisseqno := index.Getseqno()
 		newindex.Setseqno(thisseqno)
-		fmsg := "Took %v to LoadLLRB index @ %v \n\n"
+		fmsg := "Took %v to LoadMVCC index @ %v \n\n"
 		took := time.Since(now).Round(time.Second)
 		fmt.Printf(fmsg, took, thisseqno)
 
@@ -353,12 +358,13 @@ func (t *TestLLRB) badgvalidator(
 		fmt.Printf("Took %v to validate index\n\n", took)
 
 		func() {
-			t.llrbrw.Lock()
-			defer t.llrbrw.Unlock()
+			t.mvccrw.Lock()
+			defer t.mvccrw.Unlock()
 
-			compareLlrbBadger(index, badg)
+			syncsleep(mvccsetts)
+			compareMvccBadger(index, badg)
 			if (rnd.Intn(100000) % 3) == 0 {
-				loadllrb(index)
+				loadmvcc(index)
 			}
 		}()
 	}
@@ -382,13 +388,12 @@ func (t *TestLLRB) badgvalidator(
 	}
 }
 
-func (t *TestLLRB) lmdbCreater(
+func (t *TestMVCC) lmdbCreater(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	n, seedc int64, wg *sync.WaitGroup) {
 
 	defer wg.Done()
-
-	sets := []func(index *llrb.LLRB, k, v, ov []byte) (uint64, []byte){
+	sets := []func(index *llrb.MVCC, k, v, ov []byte) (uint64, []byte){
 		t.set1, t.set2, t.set3, t.set4,
 	}
 
@@ -397,19 +402,19 @@ func (t *TestLLRB) lmdbCreater(
 
 	key, value := make([]byte, 16), make([]byte, 16)
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
-	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
+	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 
 	do := func() error {
-		t.llrbrw.RLock()
-		defer t.llrbrw.RUnlock()
+		t.mvccrw.RLock()
+		defer t.mvccrw.RUnlock()
 
 		index := t.loadindex()
 
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
-		set := sets[rnd.Intn(1000000)%4]
-		refcas, _ := set(index, key, value, oldvalue)
-		oldvalue, cas, del, ok := index.Get(key, oldvalue[:0])
+		setidx := rnd.Intn(1000000) % len(sets)
+		refcas, _ := sets[setidx](index, key, value, oldvalue)
+		oldvalue, cas, del, ok := index.Get(key, oldvalue)
 		if ok == false {
 			panic("unexpected false")
 		} else if del == true {
@@ -425,8 +430,7 @@ func (t *TestLLRB) lmdbCreater(
 			count := index.Count()
 			x := time.Since(now).Round(time.Second)
 			y := time.Since(epoch).Round(time.Second)
-			fmsg := "Creater {%v items in %v} {%v items in %v} " +
-				"count:%v\n"
+			fmsg := "Creater {%v items in %v} {%v items in %v} count:%v\n"
 			fmt.Printf(fmsg, markercount, x, nc, y, count)
 			now = time.Now()
 		}
@@ -448,12 +452,12 @@ func (t *TestLLRB) lmdbCreater(
 	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), took)
 }
 
-func (t *TestLLRB) badgCreater(
+func (t *TestMVCC) badgCreater(
 	badg *badger.DB, n, seedc int64, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
-	sets := []func(index *llrb.LLRB, k, v, ov []byte) (uint64, []byte){
+	sets := []func(index *llrb.MVCC, k, v, ov []byte) (uint64, []byte){
 		t.set1, t.set2, t.set3, t.set4,
 	}
 
@@ -462,11 +466,11 @@ func (t *TestLLRB) badgCreater(
 
 	key, value := make([]byte, 16), make([]byte, 16)
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
-	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
+	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 
 	do := func() error {
-		t.llrbrw.RLock()
-		defer t.llrbrw.RUnlock()
+		t.mvccrw.RLock()
+		defer t.mvccrw.RUnlock()
 
 		index := t.loadindex()
 
@@ -512,13 +516,12 @@ func (t *TestLLRB) badgCreater(
 	fmt.Printf(fmsg, atomic.LoadInt64(&ncreates), took)
 }
 
-func (t *TestLLRB) lmdbUpdater(
+func (t *TestMVCC) lmdbUpdater(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	defer wg.Done()
-
-	sets := []func(index *llrb.LLRB, k, v, ov []byte) (uint64, []byte){
+	sets := []func(index *llrb.MVCC, k, v, ov []byte) (uint64, []byte){
 		t.set1, t.set2, t.set3, t.set4,
 	}
 
@@ -528,20 +531,19 @@ func (t *TestLLRB) lmdbUpdater(
 	g := Generateupdate(klen, vlen, n, seedl, seedc, -1)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
-	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
+	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 
 	do := func() error {
-		t.llrbrw.RLock()
-		defer t.llrbrw.RUnlock()
+		t.mvccrw.RLock()
+		defer t.mvccrw.RUnlock()
 
 		index := t.loadindex()
 
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
-		setidx := rnd.Intn(1000000) % 4
+		setidx := rnd.Intn(1000000) % len(sets)
 		for i := 2; i >= 0; i-- {
-			set := sets[setidx]
-			refcas, oldvalue := set(index, key, value, oldvalue)
+			refcas, oldvalue := sets[setidx](index, key, value, oldvalue)
 			if len(oldvalue) == 0 {
 				atomic.AddInt64(&numentries, 1)
 			}
@@ -557,8 +559,7 @@ func (t *TestLLRB) lmdbUpdater(
 			count := index.Count()
 			x := time.Since(now).Round(time.Second)
 			y := time.Since(epoch).Round(time.Second)
-			fmsg := "Updater {%v items in %v} {%v items in %v} " +
-				"count:%v\n"
+			fmsg := "Updater {%v items in %v} {%v items in %v} count:%v\n"
 			fmt.Printf(fmsg, markercount, x, nupdates, y, count)
 			now = time.Now()
 		}
@@ -581,13 +582,13 @@ func (t *TestLLRB) lmdbUpdater(
 	fmt.Printf(fmsg, nupdates, took)
 }
 
-func (t *TestLLRB) badgUpdater(
+func (t *TestMVCC) badgUpdater(
 	badg *badger.DB,
 	n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
-	sets := []func(index *llrb.LLRB, k, v, ov []byte) (uint64, []byte){
+	sets := []func(index *llrb.MVCC, k, v, ov []byte) (uint64, []byte){
 		t.set1, t.set2, t.set3, t.set4,
 	}
 
@@ -597,11 +598,11 @@ func (t *TestLLRB) badgUpdater(
 	g := Generateupdate(klen, vlen, n, seedl, seedc, -1)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
-	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
+	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 
 	do := func() error {
-		t.llrbrw.RLock()
-		defer t.llrbrw.RUnlock()
+		t.mvccrw.RLock()
+		defer t.mvccrw.RUnlock()
 
 		index := t.loadindex()
 
@@ -648,7 +649,7 @@ func (t *TestLLRB) badgUpdater(
 	fmt.Printf(fmsg, nupdates, took)
 }
 
-func (t *TestLLRB) verifyupdater(
+func (t *TestMVCC) verifyupdater(
 	key, oldvalue []byte, refcas, cas uint64, i int, del, ok bool) string {
 
 	var err error
@@ -669,8 +670,8 @@ func (t *TestLLRB) verifyupdater(
 	return "ok"
 }
 
-func (t *TestLLRB) set1(
-	index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
+func (t *TestMVCC) set1(
+	index *llrb.MVCC, key, value, oldvalue []byte) (uint64, []byte) {
 
 	oldvalue, cas := index.Set(key, value, oldvalue)
 	//fmt.Printf("update1 %q %q %q \n", key, value, oldvalue)
@@ -680,10 +681,10 @@ func (t *TestLLRB) set1(
 	return cas, oldvalue
 }
 
-func (t *TestLLRB) set2(
-	index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
+func (t *TestMVCC) set2(
+	index *llrb.MVCC, key, value, oldvalue []byte) (uint64, []byte) {
 
-	for i := 2; i >= 0; i-- {
+	for i := 3; i >= 0; i-- {
 		oldvalue, oldcas, deleted, ok := index.Get(key, oldvalue)
 		if deleted || ok == false {
 			oldcas = 0
@@ -695,7 +696,7 @@ func (t *TestLLRB) set2(
 		if ok == false && len(oldvalue) > 0 {
 			panic(fmt.Errorf("unexpected %q", oldvalue))
 		}
-		//fmt.Printf("update2 %q %q %q \n", key, value, oldvalue)
+		//fmt.Printf("mvccSet2 %q %q %v %v\n", key, value, oldcas, err)
 		if t.verifyset2(err, i, key, oldvalue) == "ok" {
 			return cas, oldvalue
 		}
@@ -703,9 +704,8 @@ func (t *TestLLRB) set2(
 	panic("unreachable code")
 }
 
-func (t *TestLLRB) verifyset2(err error, i int, key, oldvalue []byte) string {
-	if err != nil {
-	} else if len(oldvalue) > 0 {
+func (t *TestMVCC) verifyset2(err error, i int, key, oldvalue []byte) string {
+	if err == nil && len(oldvalue) > 0 {
 		comparekeyvalue(key, oldvalue, options.vallen)
 	}
 	if err != nil && i == 0 {
@@ -717,49 +717,66 @@ func (t *TestLLRB) verifyset2(err error, i int, key, oldvalue []byte) string {
 	return "ok"
 }
 
-func (t *TestLLRB) set3(
-	index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
-	txn := index.BeginTxn(0xC0FFEE)
-	oldvalue = txn.Set(key, value, oldvalue)
-	//fmt.Printf("update3 %q %q %q \n", key, value, oldvalue)
-	if len(oldvalue) > 0 {
-		comparekeyvalue(key, oldvalue, options.vallen)
-	}
-	if err := txn.Commit(); err != nil {
-		panic(err)
+func (t *TestMVCC) set3(
+	index *llrb.MVCC, key, value, oldvalue []byte) (uint64, []byte) {
+
+	for i := numcpus * 2; i >= 0; i-- {
+		txn := index.BeginTxn(0xC0FFEE)
+		oldvalue = txn.Set(key, value, oldvalue)
+		//fmt.Printf("update3 %q %q %q \n", key, value, oldvalue)
+		if len(oldvalue) > 0 {
+			comparekeyvalue(key, oldvalue, options.vallen)
+		}
+		err := txn.Commit()
+		if err == nil {
+			return 0, oldvalue
+		} else if i == 0 {
+			panic(err)
+		} else if err.Error() == api.ErrorRollback.Error() {
+			atomic.AddInt64(&rollbacks, 1)
+		}
+		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
 	}
 	return 0, oldvalue
 }
 
-func (t *TestLLRB) set4(
-	index *llrb.LLRB, key, value, oldvalue []byte) (uint64, []byte) {
+func (t *TestMVCC) set4(
+	index *llrb.MVCC, key, value, oldvalue []byte) (uint64, []byte) {
 
-	txn := index.BeginTxn(0xC0FFEE)
-	cur, err := txn.OpenCursor(key)
-	if err != nil {
-		panic(err)
-	}
-	oldvalue = cur.Set(key, value, oldvalue)
-	//fmt.Printf("update4 %q %q %q \n", key, value, oldvalue)
-	if len(oldvalue) > 0 {
-		comparekeyvalue(key, oldvalue, options.vallen)
-	}
-	if err := txn.Commit(); err != nil {
-		panic(err)
+	for i := numcpus * 2; i >= 0; i-- {
+		txn := index.BeginTxn(0xC0FFEE)
+		cur, err := txn.OpenCursor(key)
+		if err != nil {
+			panic(err)
+		}
+		oldvalue = cur.Set(key, value, oldvalue)
+		//fmt.Printf("update4 %q %q %q\n", key, value, oldvalue)
+		if len(oldvalue) > 0 {
+			comparekeyvalue(key, oldvalue, options.vallen)
+		}
+		err = txn.Commit()
+		if err == nil {
+			return 0, oldvalue
+		} else if i == 0 {
+			panic(err)
+		} else if err.Error() == api.ErrorRollback.Error() {
+			atomic.AddInt64(&rollbacks, 1)
+		}
+		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
 	}
 	return 0, oldvalue
 }
 
-func (t *TestLLRB) lmdbDeleter(
+func (t *TestMVCC) lmdbDeleter(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	defer wg.Done()
-	time.Sleep(1 * time.Second) // delay start for llrbUpdater to catchup.
-
-	dels := []func(*llrb.LLRB, []byte, []byte, bool) (uint64, bool){
+	dels := []func(*llrb.MVCC, []byte, []byte, bool) (uint64, bool){
 		t.del1, t.del2, t.del3, t.del4,
 	}
+
+	time.Sleep(1 * time.Second) // delay start for mvccUpdater to catchup.
 
 	var ndeletes, xdeletes int64
 	var key, value []byte
@@ -767,33 +784,33 @@ func (t *TestLLRB) lmdbDeleter(
 	g := Generatedelete(klen, vlen, n, seedl, seedc, delmod)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
-	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
+	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 	lsmmap := map[int]bool{0: true, 1: false}
 
 	do := func() error {
-		t.llrbrw.RLock()
-		defer t.llrbrw.RUnlock()
+		t.mvccrw.RLock()
+		defer t.mvccrw.RUnlock()
 
 		index := t.loadindex()
 
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
 		//fmt.Printf("delete %q\n", key)
-		delidx, lsm := rnd.Intn(1000000)%len(dels), lsmmap[rnd.Intn(1000000)%2]
+		ln := len(dels)
+		delidx, lsm := rnd.Intn(1000000)%ln, lsmmap[rnd.Intn(1000000)%2]
 		if lsm {
 			delidx = delidx % 2
 		}
+		//fmt.Printf("delete %q %v %v\n", key, lsm, delidx)
+		var ok1 bool
+		var refcas uint64
 		for i := 2; i >= 0; i-- {
-			dodel := dels[delidx]
-			refcas, ok1 := dodel(index, key, value, lsm)
+			refcas, ok1 = dels[delidx](index, key, value, lsm)
 			oldvalue, _, _, ok2 := index.Get(key, oldvalue)
-			rc := t.vllrbdel(index, key, oldvalue, refcas, i, lsm, ok2)
+			rc := t.vmvccdel(index, key, oldvalue, refcas, i, lsm, ok2)
 			if rc == "ok" {
-				if ok1 == false && lsm == false {
+				if ok1 == false {
 					xdeletes++
-				} else if ok1 == false && lsm == true {
-					ndeletes++
-					atomic.AddInt64(&totalwrites, 1)
 				} else if ok1 == true && lsm == false {
 					ndeletes++
 					atomic.AddInt64(&totalwrites, 1)
@@ -810,18 +827,20 @@ func (t *TestLLRB) lmdbDeleter(
 			count := index.Count()
 			x := time.Since(now).Round(time.Second)
 			y := time.Since(epoch).Round(time.Second)
-			fmsg := "Deleter {%v items %v} {%v:%v items in %v} " +
-				"count:%v\n"
+			fmsg := "Deleter {%v items in %v} {%v:%v items in %v} cnt:%v\n"
 			fmt.Printf(fmsg, markercount, x, ndeletes, xdeletes, y, count)
 			now = time.Now()
 		}
 
 		// update lmdb
-		if _, err := lmdbDodelete(lmdbenv, lmdbdbi, key, value); err != nil {
-			if strings.Contains(err.Error(), lmdbmissingerr) {
-				return nil
+		if ok1 {
+			_, err := lmdbDodelete(lmdbenv, lmdbdbi, key, value)
+			if err != nil {
+				if strings.Contains(err.Error(), lmdbmissingerr) {
+					return nil
+				}
+				panic(err)
 			}
-			panic(err)
 		}
 		return nil
 	}
@@ -837,16 +856,16 @@ func (t *TestLLRB) lmdbDeleter(
 	fmt.Printf(fmsg, ndeletes, xdeletes, took)
 }
 
-func (t *TestLLRB) badgDeleter(
+func (t *TestMVCC) badgDeleter(
 	badg *badger.DB,
 	n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	defer wg.Done()
-	dels := []func(*llrb.LLRB, []byte, []byte, bool) (uint64, bool){
+	dels := []func(*llrb.MVCC, []byte, []byte, bool) (uint64, bool){
 		t.del1, t.del2, t.del3, t.del4,
 	}
 
-	time.Sleep(1 * time.Second) // delay start for llrbUpdater to catchup.
+	time.Sleep(1 * time.Second) // delay start for mvccUpdater to catchup.
 
 	var ndeletes, xdeletes int64
 	var key, value []byte
@@ -854,33 +873,32 @@ func (t *TestLLRB) badgDeleter(
 	g := Generatedelete(klen, vlen, n, seedl, seedc, delmod)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
-	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
+	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 	lsmmap := map[int]bool{0: true, 1: false}
 
 	do := func() error {
-		t.llrbrw.RLock()
-		defer t.llrbrw.RUnlock()
+		t.mvccrw.RLock()
+		defer t.mvccrw.RUnlock()
 
 		index := t.loadindex()
 
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
-		//fmt.Printf("delete %q\n", key)
 		ln := len(dels)
 		delidx, lsm := rnd.Intn(1000000)%ln, lsmmap[rnd.Intn(1000000)%2]
 		if lsm {
 			delidx = delidx % 2
 		}
+		//fmt.Printf("delete %q %v %v\n", key, lsm, delidx)
+		var ok1 bool
+		var refcas uint64
 		for i := 2; i >= 0; i-- {
-			refcas, ok1 := dels[delidx](index, key, value, lsm)
+			refcas, ok1 = dels[delidx](index, key, value, lsm)
 			oldvalue, _, _, ok2 := index.Get(key, oldvalue)
-			rc := t.vllrbdel(index, key, oldvalue, refcas, i, lsm, ok2)
+			rc := t.vmvccdel(index, key, oldvalue, refcas, i, lsm, ok2)
 			if rc == "ok" {
-				if ok1 == false && lsm == false {
+				if ok1 == false {
 					xdeletes++
-				} else if ok1 == false && lsm == true {
-					ndeletes++
-					atomic.AddInt64(&totalwrites, 1)
 				} else if ok1 == true && lsm == false {
 					ndeletes++
 					atomic.AddInt64(&totalwrites, 1)
@@ -923,40 +941,27 @@ func (t *TestLLRB) badgDeleter(
 	fmt.Printf(fmsg, ndeletes, xdeletes, took)
 }
 
-func (t *TestLLRB) vllrbdel(
-	index interface{}, key, oldvalue []byte, refcas uint64,
+func (t *TestMVCC) vmvccdel(
+	index *llrb.MVCC, key, oldvalue []byte, refcas uint64,
 	i int, lsm, ok bool) string {
 
 	var err error
-	var cur api.Cursor
-	if lsm == false {
-		if ok == true {
-			err = fmt.Errorf("unexpected true when lsm is false")
-		} else if len(oldvalue) > 0 {
-			err = fmt.Errorf("unexpected %q when lsm is false", oldvalue)
-		}
+	if lsm {
+		view := index.View(0x1234)
 
-	} else {
-		var view api.Transactor
-		switch idx := index.(type) {
-		case *llrb.LLRB:
-			view = idx.View(0x1234)
-		case *llrb.MVCC:
-			view = idx.View(0x1234)
-		}
-
-		cur, err = view.OpenCursor(key)
+		cur, err := view.OpenCursor(key)
 		if err == nil {
-			_, oldvalue, cas, del, err := cur.YNext(false)
-
-			if err != nil {
+			key1, value, cas, del, err := cur.YNext(false)
+			if err == io.EOF || bytes.Compare(key1, key) != 0 {
+				// TODO: handle this case !!
+			} else if err != nil {
+				panic(err)
 			} else if del == false {
 				err = fmt.Errorf("expected delete")
 			} else if refcas > 0 && cas != refcas {
 				err = fmt.Errorf("expected %v, got %v", refcas, cas)
-			}
-			if len(oldvalue) > 0 {
-				comparekeyvalue(key, oldvalue, options.vallen)
+			} else if len(value) > 0 {
+				comparekeyvalue(key, value, options.vallen)
 			}
 		}
 		view.Abort()
@@ -971,85 +976,142 @@ func (t *TestLLRB) vllrbdel(
 	return "ok"
 }
 
-func (t *TestLLRB) del1(
-	index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
+func (t *TestMVCC) del1(
+	index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 
-	var ok bool
-
-	oldval, cas := index.Delete(key, oldval, lsm)
-	if len(oldval) > 0 {
-		comparekeyvalue(key, oldval, options.vallen)
-		ok = true
+	//fmt.Printf("mvccDel1 %q %v\n", key, lsm)
+	oldvalue, cas := index.Delete(key, oldvalue, lsm)
+	if len(oldvalue) > 0 {
+		comparekeyvalue(key, oldvalue, options.vallen)
 	}
-	return cas, ok
+	return cas, true
 }
 
-func (t *TestLLRB) del2(
-	index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
+func (t *TestMVCC) del2(
+	index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 
-	var ok bool
-
-	txn := index.BeginTxn(0xC0FFEE)
-	oldval = txn.Delete(key, oldval, lsm)
-	if len(oldval) > 0 {
-		comparekeyvalue(key, oldval, options.vallen)
-		ok = true
+	for i := numcpus * 2; i >= 0; i-- {
+		txn := index.BeginTxn(0xC0FFEE)
+		oldvalue = txn.Delete(key, oldvalue, lsm)
+		if len(oldvalue) > 0 {
+			comparekeyvalue(key, oldvalue, options.vallen)
+		}
+		err := txn.Commit()
+		if err == nil {
+			return 0, true
+		} else if err.Error() == api.ErrorRollback.Error() {
+			atomic.AddInt64(&rollbacks, 1)
+		} else {
+			panic(err)
+		}
+		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
 	}
-	if err := txn.Commit(); err != nil {
-		panic(err)
-	}
-	return 0, ok
+	panic("too many rollbacks")
 }
 
-func (t *TestLLRB) del3(
-	index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
+func (t *TestMVCC) del3(
+	index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 
-	var ok bool
-
-	txn := index.BeginTxn(0xC0FFEE)
-	cur, err := txn.OpenCursor(key)
-	if err != nil {
-		panic(err)
+	for i := numcpus * 2; i >= 0; i-- {
+		txn := index.BeginTxn(0xC0FFEE)
+		cur, err := txn.OpenCursor(key)
+		if err != nil {
+			panic(err)
+		}
+		oldvalue = cur.Delete(key, oldvalue, lsm)
+		if len(oldvalue) > 0 {
+			comparekeyvalue(key, oldvalue, options.vallen)
+		}
+		err = txn.Commit()
+		if err == nil {
+			return 0, true
+		} else if err.Error() == api.ErrorRollback.Error() {
+			atomic.AddInt64(&rollbacks, 1)
+		} else {
+			panic(err)
+		}
+		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
 	}
-	oldval = cur.Delete(key, oldval, lsm)
-	if len(oldval) > 0 {
-		comparekeyvalue(key, oldval, options.vallen)
-		ok = true
-	}
-	if err := txn.Commit(); err != nil {
-		panic(err)
-	}
-	return 0, ok
+	panic("too many rollbacks")
 }
 
-func (t *TestLLRB) del4(
-	index *llrb.LLRB, key, oldval []byte, lsm bool) (uint64, bool) {
+func (t *TestMVCC) del4(
+	index *llrb.MVCC, key, oldvalue []byte, lsm bool) (uint64, bool) {
 
-	var ok bool
-
-	txn := index.BeginTxn(0xC0FFEE)
-	cur, err := txn.OpenCursor(key)
-	if err != nil {
-		panic(err)
-	}
-	curkey, _ := cur.Key()
-	if bytes.Compare(key, curkey) == 0 {
+	for i := numcpus * 2; i >= 0; i-- {
+		txn := index.BeginTxn(0xC0FFEE)
+		cur, err := txn.OpenCursor(key)
+		if err != nil {
+			panic(err)
+		}
+		curkey, _ := cur.Key()
+		if bytes.Compare(key, curkey) != 0 {
+			txn.Abort()
+			return 0, false
+		}
 		cur.Delcursor(lsm)
-		ok = true
+		err = txn.Commit()
+		if err == nil {
+			return 0, true
+		} else if err.Error() == api.ErrorRollback.Error() {
+			atomic.AddInt64(&rollbacks, 1)
+		} else {
+			panic(err)
+		}
+		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
 	}
-	if err := txn.Commit(); err != nil {
-		panic(err)
-	}
-	return 0, ok
+	panic("too many rollbacks")
 }
 
-func (t *TestLLRB) lmdbGetter(
+var sidekey = []byte("00000011000000000000000002396386")
+var sideval = []byte("00000011000000000000000002396386u\x00\x00\x00\x00\x0fBE")
+
+func (t *TestMVCC) lmdbSidechan(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
-	n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
+	n, seedl, seedc int64, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
-	gets := []func(*lmdb.Env, lmdb.DBI, *llrb.LLRB,
+	oldvalue := make([]byte, 16)
+	do := func() error {
+		t.mvccrw.RLock()
+		defer t.mvccrw.RUnlock()
+
+		// update
+		index := t.loadindex()
+		t.set1(index, sidekey, sideval, oldvalue)
+		_, err := lmdbDoupdate(lmdbenv, lmdbdbi, sidekey, sideval)
+		if err != nil {
+			panic(err)
+		}
+		// delete
+		t.del1(index, sidekey, sideval, options.lsm)
+		_, err = lmdbDodelete(lmdbenv, lmdbdbi, sidekey, sideval)
+		if err != nil {
+			if strings.Contains(err.Error(), lmdbmissingerr) {
+				return nil
+			}
+			panic(err)
+		}
+		return nil
+	}
+
+	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
+		if err := do(); err != nil {
+			return
+		}
+		runtime.Gosched()
+	}
+}
+
+func (t *TestMVCC) lmdbGetter(
+	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
+	n, seedl, seedc int64,
+	fin chan struct{}, wg *sync.WaitGroup) {
+
+	defer wg.Done()
+
+	gets := []func(*lmdb.Env, lmdb.DBI, *llrb.MVCC,
 		[]byte, []byte) ([]byte, uint64, bool, bool){
 
 		t.lmdbGet1, t.lmdbGet2, t.lmdbGet3,
@@ -1063,13 +1125,12 @@ func (t *TestLLRB) lmdbGetter(
 	rnd := rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(10000000)
 	value := make([]byte, 16)
-
 loop:
 	for {
 		index := t.loadindex()
 		ngets++
 		key = g(key, atomic.LoadInt64(&ncreates))
-		get := gets[(rnd.Intn(1000000) % len(gets))]
+		get := gets[rnd.Intn(1000000)%len(gets)]
 		value, _, del, _ = get(lmdbenv, lmdbdbi, index, key, value)
 		if x, xerr := strconv.Atoi(Bytes2str(key)); xerr != nil {
 			panic(xerr)
@@ -1092,57 +1153,58 @@ loop:
 		if ngm := ngets + nmisses; ngm%markercount == 0 {
 			x := time.Since(now).Round(time.Second)
 			y := time.Since(epoch).Round(time.Second)
-			fmsg := "llrbLmdbGetter {%v items in %v} {%v:%v items in %v}\n"
+			fmsg := "Getter {%v items in %v} {%v:%v items in %v}\n"
 			fmt.Printf(fmsg, markercount, x, ngets, nmisses, y)
+			now = time.Now()
 		}
 
 		runtime.Gosched()
 	}
 	took := time.Since(epoch).Round(time.Second)
 	<-fin
-	fmsg := "at exit, llrbLmdbGetter %v:%v items in %v\n"
+	fmsg := "at exit, Getter %v:%v items in %v\n"
 	fmt.Printf(fmsg, ngets, nmisses, took)
 }
 
-func (t *TestLLRB) lmdbGet1(
+func (t *TestMVCC) lmdbGet1(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
-	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
+	index *llrb.MVCC, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	llrbval, seqno, del, ok := index.Get(key, value)
+	mvccval, seqno, del, ok := index.Get(key, value)
 
 	get := func(txn *lmdb.Txn) (err error) {
 		lmdbval, err := txn.Get(lmdbdbi, key)
 		if del == false && options.vallen > 0 {
-			if bytes.Compare(llrbval, lmdbval) != 0 {
+			if bytes.Compare(mvccval, lmdbval) != 0 {
 				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, lmdbval, llrbval)
+				return fmt.Errorf(fmsg, lmdbval, mvccval)
 			}
 		}
 		return nil
 	}
 	trylmdbget(lmdbenv, 5000, get)
 
-	return llrbval, seqno, del, ok
+	return mvccval, seqno, del, ok
 }
 
-func (t *TestLLRB) lmdbGet2(
+func (t *TestMVCC) lmdbGet2(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
-	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
+	index *llrb.MVCC, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	var llrbval []byte
+	var mvccval []byte
 	var del, ok bool
-	var llrbtxn api.Transactor
+	var mvcctxn api.Transactor
 
 	get := func(txn *lmdb.Txn) (err error) {
-		llrbtxn = index.BeginTxn(0xC0FFEE)
-		llrbval, _, del, ok = llrbtxn.Get(key, value)
+		mvcctxn = index.BeginTxn(0xC0FFEE)
+		mvccval, _, del, ok = mvcctxn.Get(key, value)
 
 		lmdbval, err := txn.Get(lmdbdbi, key)
 		if del == false && options.vallen > 0 {
-			if bytes.Compare(llrbval, lmdbval) != 0 {
-				llrbtxn.Abort()
+			if bytes.Compare(mvccval, lmdbval) != 0 {
+				mvcctxn.Abort()
 				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, lmdbval, llrbval)
+				return fmt.Errorf(fmsg, lmdbval, mvccval)
 			}
 		}
 		return nil
@@ -1150,7 +1212,7 @@ func (t *TestLLRB) lmdbGet2(
 	trylmdbget(lmdbenv, 5000, get)
 
 	if ok == true {
-		cur, err := llrbtxn.OpenCursor(key)
+		cur, err := mvcctxn.OpenCursor(key)
 		if err != nil {
 			panic(err)
 		}
@@ -1158,33 +1220,33 @@ func (t *TestLLRB) lmdbGet2(
 			panic(fmt.Errorf("expected %v, got %v", del, cdel))
 		} else if bytes.Compare(ckey, key) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, ckey))
-		} else if cvalue := cur.Value(); bytes.Compare(cvalue, llrbval) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", llrbval, cvalue))
+		} else if cvalue := cur.Value(); bytes.Compare(cvalue, mvccval) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", mvccval, cvalue))
 		}
 	}
-	llrbtxn.Abort()
+	mvcctxn.Abort()
 
-	return llrbval, 0, del, ok
+	return mvccval, 0, del, ok
 }
 
-func (t *TestLLRB) lmdbGet3(
+func (t *TestMVCC) lmdbGet3(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
-	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
+	index *llrb.MVCC, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	var llrbval []byte
+	var mvccval []byte
 	var del, ok bool
 	var view api.Transactor
 
 	get := func(txn *lmdb.Txn) (err error) {
 		view = index.View(0x1235)
-		llrbval, _, del, ok = view.Get(key, value)
+		mvccval, _, del, ok = view.Get(key, value)
 
 		lmdbval, err := txn.Get(lmdbdbi, key)
 		if del == false && options.vallen > 0 {
-			if bytes.Compare(llrbval, lmdbval) != 0 {
+			if bytes.Compare(mvccval, lmdbval) != 0 {
 				view.Abort()
 				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, lmdbval, llrbval)
+				return fmt.Errorf(fmsg, lmdbval, mvccval)
 			}
 		}
 		return nil
@@ -1196,26 +1258,32 @@ func (t *TestLLRB) lmdbGet3(
 		if err != nil {
 			panic(err)
 		}
-		if ckey, cdel := cur.Key(); cdel != del {
-			panic(fmt.Errorf("expected %v, got %v", del, cdel))
-		} else if bytes.Compare(ckey, key) != 0 {
+		ykey, yvalue, _, ydel, _ := cur.YNext(false /*fin*/)
+		if bytes.Compare(key, ykey) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", key, ykey))
+		} else if del == false && ydel == false {
+			if bytes.Compare(mvccval, yvalue) != 0 {
+				panic(fmt.Errorf("expected %q, got %q", mvccval, yvalue))
+			}
+		}
+		if ckey, _ := cur.Key(); bytes.Compare(ckey, key) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, ckey))
-		} else if cvalue := cur.Value(); bytes.Compare(cvalue, llrbval) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", llrbval, cvalue))
+		} else if cvalue := cur.Value(); bytes.Compare(cvalue, mvccval) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", mvccval, cvalue))
 		}
 	}
 	view.Abort()
 
-	return llrbval, 0, del, ok
+	return mvccval, 0, del, ok
 }
 
-func (t *TestLLRB) badgGetter(
+func (t *TestMVCC) badgGetter(
 	badg *badger.DB,
 	n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
-	gets := []func(*badger.DB, *llrb.LLRB,
+	gets := []func(*badger.DB, *llrb.MVCC,
 		[]byte, []byte) ([]byte, uint64, bool, bool){
 
 		t.badgGet1, t.badgGet2, t.badgGet3,
@@ -1269,47 +1337,47 @@ loop:
 	fmt.Printf(fmsg, ngets, nmisses, took)
 }
 
-func (t *TestLLRB) badgGet1(
+func (t *TestMVCC) badgGet1(
 	badg *badger.DB,
-	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
+	index *llrb.MVCC, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	llrbval, seqno, del, ok := index.Get(key, value)
+	mvccval, seqno, del, ok := index.Get(key, value)
 
 	get := func(txn *badger.Txn) error {
 		item, _ := txn.Get(key)
 		if del == false && options.vallen > 0 && item != nil {
 			badgval, _ := item.Value()
-			if bytes.Compare(llrbval, badgval) != 0 {
+			if bytes.Compare(mvccval, badgval) != 0 {
 				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, badgval, llrbval)
+				return fmt.Errorf(fmsg, badgval, mvccval)
 			}
 		}
 		return nil
 	}
 	trybadgget(badg, 5000, get)
 
-	return llrbval, seqno, del, ok
+	return mvccval, seqno, del, ok
 }
 
-func (t *TestLLRB) badgGet2(
+func (t *TestMVCC) badgGet2(
 	badg *badger.DB,
-	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
+	index *llrb.MVCC, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	var llrbval []byte
+	var mvccval []byte
 	var del, ok bool
-	var llrbtxn api.Transactor
+	var mvcctxn api.Transactor
 
 	get := func(txn *badger.Txn) (err error) {
-		llrbtxn = index.BeginTxn(0xC0FFEE)
-		llrbval, _, del, ok = llrbtxn.Get(key, value)
+		mvcctxn = index.BeginTxn(0xC0FFEE)
+		mvccval, _, del, ok = mvcctxn.Get(key, value)
 
 		item, err := txn.Get(key)
 		if del == false && options.vallen > 0 && item != nil {
 			badgval, _ := item.Value()
-			if bytes.Compare(llrbval, badgval) != 0 {
-				llrbtxn.Abort()
+			if bytes.Compare(mvccval, badgval) != 0 {
+				mvcctxn.Abort()
 				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, badgval, llrbval)
+				return fmt.Errorf(fmsg, badgval, mvccval)
 			}
 		}
 		return nil
@@ -1317,7 +1385,7 @@ func (t *TestLLRB) badgGet2(
 	trybadgget(badg, 5000, get)
 
 	if ok == true {
-		cur, err := llrbtxn.OpenCursor(key)
+		cur, err := mvcctxn.OpenCursor(key)
 		if err != nil {
 			panic(err)
 		}
@@ -1325,34 +1393,34 @@ func (t *TestLLRB) badgGet2(
 			panic(fmt.Errorf("expected %v, got %v", del, cdel))
 		} else if bytes.Compare(ckey, key) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, ckey))
-		} else if cvalue := cur.Value(); bytes.Compare(cvalue, llrbval) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", llrbval, cvalue))
+		} else if cvalue := cur.Value(); bytes.Compare(cvalue, mvccval) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", mvccval, cvalue))
 		}
 	}
-	llrbtxn.Abort()
+	mvcctxn.Abort()
 
-	return llrbval, 0, del, ok
+	return mvccval, 0, del, ok
 }
 
-func (t *TestLLRB) badgGet3(
+func (t *TestMVCC) badgGet3(
 	badg *badger.DB,
-	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
+	index *llrb.MVCC, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	var llrbval []byte
+	var mvccval []byte
 	var del, ok bool
 	var view api.Transactor
 
 	get := func(txn *badger.Txn) (err error) {
 		view = index.View(0x1235)
-		llrbval, _, del, ok = view.Get(key, value)
+		mvccval, _, del, ok = view.Get(key, value)
 
 		item, err := txn.Get(key)
 		if del == false && options.vallen > 0 && item != nil {
 			badgval, _ := item.Value()
-			if bytes.Compare(llrbval, badgval) != 0 {
+			if bytes.Compare(mvccval, badgval) != 0 {
 				view.Abort()
 				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, badgval, llrbval)
+				return fmt.Errorf(fmsg, badgval, mvccval)
 			}
 		}
 		return nil
@@ -1368,21 +1436,21 @@ func (t *TestLLRB) badgGet3(
 			panic(fmt.Errorf("expected %v, got %v", del, cdel))
 		} else if bytes.Compare(ckey, key) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, ckey))
-		} else if cvalue := cur.Value(); bytes.Compare(cvalue, llrbval) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", llrbval, cvalue))
+		} else if cvalue := cur.Value(); bytes.Compare(cvalue, mvccval) != 0 {
+			panic(fmt.Errorf("expected %q, got %q", mvccval, cvalue))
 		}
 	}
 	view.Abort()
 
-	return llrbval, 0, del, ok
+	return mvccval, 0, del, ok
 }
 
-func (t *TestLLRB) Ranger(
+func (t *TestMVCC) Ranger(
 	n, seedl, seedc int64, fin chan struct{}, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
-	rngs := []func(index *llrb.LLRB, key, val []byte) int64{
+	rngs := []func(index *llrb.MVCC, key, val []byte) int64{
 		t.range1, t.range2, t.range3, t.range4,
 	}
 
@@ -1392,13 +1460,12 @@ func (t *TestLLRB) Ranger(
 
 	rnd := rand.New(rand.NewSource(seedc))
 	epoch, value := time.Now(), make([]byte, 16)
-
 loop:
 	for {
 		index := t.loadindex()
 		key = g(key, atomic.LoadInt64(&ncreates))
-		rangefn := rngs[rnd.Intn(1000000)%len(rngs)]
-		n := rangefn(index, key, value)
+		dorange := rngs[rnd.Intn(1000000)%len(rngs)]
+		n := dorange(index, key, value)
 		nranges += n
 		select {
 		case <-fin:
@@ -1409,10 +1476,11 @@ loop:
 	}
 	took := time.Since(epoch).Round(time.Second)
 	<-fin
-	fmt.Printf("at exit, llrbLmdbRanger %v items in %v\n", nranges, took)
+	fmt.Printf("at exit, Ranger %v items in %v\n", nranges, took)
 }
 
-func (t *TestLLRB) range1(index *llrb.LLRB, key, value []byte) (n int64) {
+func (t *TestMVCC) range1(index *llrb.MVCC, key, value []byte) (n int64) {
+	//fmt.Printf("mvccRange1 %q\n", key)
 	txn := index.BeginTxn(0xC0FFEE)
 	cur, err := txn.OpenCursor(key)
 	if err != nil {
@@ -1427,16 +1495,15 @@ func (t *TestLLRB) range1(index *llrb.LLRB, key, value []byte) (n int64) {
 			panic(xerr)
 		} else if (int64(x)%updtdel) != delmod && del == true {
 			panic("unexpected delete")
-		} else if del == false {
-			comparekeyvalue(key, value, options.vallen)
 		}
+		comparekeyvalue(key, value, options.vallen)
 		n++
 	}
 	txn.Abort()
 	return
 }
 
-func (t *TestLLRB) range2(index *llrb.LLRB, key, value []byte) (n int64) {
+func (t *TestMVCC) range2(index *llrb.MVCC, key, value []byte) (n int64) {
 	txn := index.BeginTxn(0xC0FFEE)
 	cur, err := txn.OpenCursor(key)
 	if err != nil {
@@ -1462,7 +1529,7 @@ func (t *TestLLRB) range2(index *llrb.LLRB, key, value []byte) (n int64) {
 	return
 }
 
-func (t *TestLLRB) range3(index *llrb.LLRB, key, value []byte) (n int64) {
+func (t *TestMVCC) range3(index *llrb.MVCC, key, value []byte) (n int64) {
 	view := index.View(0x1236)
 	cur, err := view.OpenCursor(key)
 	if err != nil {
@@ -1488,7 +1555,7 @@ func (t *TestLLRB) range3(index *llrb.LLRB, key, value []byte) (n int64) {
 	return
 }
 
-func (t *TestLLRB) range4(index *llrb.LLRB, key, value []byte) (n int64) {
+func (t *TestMVCC) range4(index *llrb.MVCC, key, value []byte) (n int64) {
 	view := index.View(0x1237)
 	cur, err := view.OpenCursor(key)
 	if err != nil {
@@ -1514,15 +1581,15 @@ func (t *TestLLRB) range4(index *llrb.LLRB, key, value []byte) (n int64) {
 	return
 }
 
-func compareLlrbLmdb(index *llrb.LLRB, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
+func compareMvccLmdb(index *llrb.MVCC, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
 	lmdbcount := getlmdbCount(lmdbenv, lmdbdbi)
-	llrbcount := index.Count()
-	seqno := atomic.LoadUint64(&seqno)
-	fmsg := "compareLlrbLmdb, lmdbcount:%v llrbcount:%v seqno:%v\n"
-	fmt.Printf(fmsg, lmdbcount, llrbcount, seqno)
+	mvcccount := index.Count()
+	fmsg := "compareMvccLmdb, lmdbcount:%v mvcccount:%v\n"
+	fmt.Printf(fmsg, lmdbcount, mvcccount)
 
 	epoch, cmpcount := time.Now(), 0
 
+	//fmt.Println("mvcc seqno", index.Getseqno())
 	iter := index.Scan()
 	err := lmdbenv.View(func(txn *lmdb.Txn) error {
 		lmdbcur, err := txn.OpenCursor(lmdbdbi)
@@ -1530,40 +1597,33 @@ func compareLlrbLmdb(index *llrb.LLRB, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
 			panic(err)
 		}
 
-		llrbkey, llrbval, _, llrbdel, llrberr := iter(false /*fin*/)
+		mvcckey, mvccval, _, mvccdel, mvccerr := iter(false /*fin*/)
 		lmdbkey, lmdbval, lmdberr := lmdbcur.Get(nil, nil, lmdb.Next)
 
-		for llrbkey != nil {
-			if llrbdel == false {
+		for mvcckey != nil {
+			if mvccdel == false {
 				cmpcount++
-				if llrberr != nil {
-					panic(llrberr)
-
+				if mvccerr != nil {
+					panic(mvccerr)
 				} else if lmdberr != nil {
 					panic(lmdberr)
-
-				} else if bytes.Compare(llrbkey, lmdbkey) != 0 {
+				} else if bytes.Compare(mvcckey, lmdbkey) != 0 {
 					val, seqno, del, ok := index.Get(lmdbkey, make([]byte, 0))
 					fmt.Printf("%q %v %v %v\n", val, seqno, del, ok)
-					val = cmplmdbget(lmdbenv, lmdbdbi, llrbkey)
-					fmt.Printf("%q\n", val)
+					val, seqno, del, ok = index.Get(mvcckey, make([]byte, 0))
+					fmt.Printf("%q %v %v %v\n", val, seqno, del, ok)
 
-					fmsg := "expected %q,%q, got %q,%q"
-					panic(fmt.Errorf(fmsg, lmdbkey, lmdbval, llrbkey, llrbval))
-
-				} else if bytes.Compare(llrbval, lmdbval) != 0 {
-					fmsg := "for %q expected val %q, got val %q\n"
-					x, y := lmdbval[:options.vallen], llrbval[:options.vallen]
-					fmt.Printf(fmsg, llrbkey, x, y)
-					fmsg = "for %q expected seqno %v, got %v\n"
-					x, y = lmdbval[options.vallen:], llrbval[options.vallen:]
-					fmt.Printf(fmsg, llrbkey, lmdbval, llrbval)
-					panic("error")
+					fmsg := "expected %q,%q, got %q,%q,%v"
+					x, y, z := mvcckey, mvccval, mvccdel
+					panic(fmt.Errorf(fmsg, lmdbkey, lmdbval, x, y, z))
+				} else if bytes.Compare(mvccval, lmdbval) != 0 {
+					fmsg := "for %q expected %q, got %q"
+					panic(fmt.Errorf(fmsg, mvcckey, lmdbval, mvccval))
 				}
-				//fmt.Printf("compareLlrbLmdb %q okay ...\n", llrbkey)
+				//fmt.Printf("compareMvccLmdb %q okay ...\n", llrbkey)
 				lmdbkey, lmdbval, lmdberr = lmdbcur.Get(nil, nil, lmdb.Next)
 			}
-			llrbkey, llrbval, _, llrbdel, llrberr = iter(false /*fin*/)
+			mvcckey, mvccval, _, mvccdel, mvccerr = iter(false /*fin*/)
 		}
 		if lmdbkey != nil {
 			return fmt.Errorf("found lmdb key %q\n", lmdbkey)
@@ -1576,10 +1636,10 @@ func compareLlrbLmdb(index *llrb.LLRB, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
 	iter(true /*fin*/)
 
 	took := time.Since(epoch).Round(time.Second)
-	fmt.Printf("Took %v to compare (%v) LLRB and LMDB\n\n", took, cmpcount)
+	fmt.Printf("Took %v to compare (%v) MVCC and LMDB\n\n", took, cmpcount)
 }
 
-func compareLlrbBadger(index *llrb.LLRB, badg *badger.DB) {
+func compareMvccBadger(index *llrb.MVCC, badg *badger.DB) {
 	epoch, cmpcount := time.Now(), 0
 
 	iter := index.Scan()
@@ -1590,42 +1650,41 @@ func compareLlrbBadger(index *llrb.LLRB, badg *badger.DB) {
 		it.Rewind()
 
 		for it.Valid() {
-			llrbkey, llrbval, _, llrbdel, llrberr := iter(false /*fin*/)
+			mvcckey, mvccval, _, mvccdel, mvccerr := iter(false /*fin*/)
 			item := it.Item()
 			badgkey := item.Key()
 			badgval, badgerr := item.Value()
 
-			if llrbdel == false {
+			if mvccdel == false {
 				cmpcount++
-				if llrberr != nil {
-					panic(llrberr)
+				if mvccerr != nil {
+					panic(mvccerr)
 
 				} else if badgerr != nil {
 					panic(badgerr)
 
-				} else if bytes.Compare(llrbkey, badgkey) != 0 {
+				} else if bytes.Compare(mvcckey, badgkey) != 0 {
 					fmsg := "expected %q,%q, got %q,%q"
-					panic(fmt.Errorf(fmsg, badgkey, badgval, llrbkey, llrbval))
+					panic(fmt.Errorf(fmsg, badgkey, badgval, mvcckey, mvccval))
 
-				} else if bytes.Compare(llrbval, badgval) != 0 {
+				} else if bytes.Compare(mvccval, badgval) != 0 {
 					fmsg := "for %q expected val %q, got val %q\n"
-					x, y := badgval[:options.vallen], llrbval[:options.vallen]
-					fmt.Printf(fmsg, llrbkey, x, y)
+					x, y := badgval[:options.vallen], mvccval[:options.vallen]
+					fmt.Printf(fmsg, mvcckey, x, y)
 					fmsg = "for %q expected seqno %v, got %v\n"
-					x, y = badgval[options.vallen:], llrbval[options.vallen:]
-					fmt.Printf(fmsg, llrbkey, badgval, llrbval)
+					x, y = badgval[options.vallen:], mvccval[options.vallen:]
+					fmt.Printf(fmsg, mvcckey, badgval, mvccval)
 					panic("error")
 				}
 				it.Next()
 			}
 		}
-		llrbkey, _, _, llrbdel, llrberr := iter(false /*fin*/)
-		for llrberr != io.EOF && llrbdel == true {
-			llrbkey, _, _, llrbdel, llrberr = iter(false /*fin*/)
+		mvcckey, _, _, mvccdel, mvccerr := iter(false /*fin*/)
+		for mvccerr != io.EOF && mvccdel == true {
+			mvcckey, _, _, mvccdel, mvccerr = iter(false /*fin*/)
 		}
-		if llrberr != io.EOF {
-			fmsg := "llrb items remaining {key:%q, del:%v err:%v"
-			panic(fmt.Errorf(fmsg, llrbkey, llrbdel, llrberr))
+		if mvccerr != io.EOF {
+			panic(fmt.Errorf("mvcc items remaining %q", mvcckey))
 		}
 		return nil
 	})
@@ -1635,5 +1694,5 @@ func compareLlrbBadger(index *llrb.LLRB, badg *badger.DB) {
 	iter(true /*fin*/)
 
 	took := time.Since(epoch).Round(time.Second)
-	fmt.Printf("Took %v to compare (%v) LLRB and BADGER\n\n", took, cmpcount)
+	fmt.Printf("Took %v to compare (%v) MVCC and BADGER\n\n", took, cmpcount)
 }

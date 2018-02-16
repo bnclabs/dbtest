@@ -217,7 +217,7 @@ func badgDoupdate(badg *badger.DB, key, value []byte) (new bool, err error) {
 		}
 		return nil
 	}
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 20; i++ {
 		if err = badg.Update(update); err == nil {
 			return
 		} else if strings.Contains(err.Error(), badgconflict) {
