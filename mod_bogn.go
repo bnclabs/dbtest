@@ -135,7 +135,7 @@ func bognvalidator(
 		}()
 	}
 
-	tick := time.NewTicker(20 * time.Second)
+	tick := time.NewTicker(25 * time.Second)
 	for {
 		select {
 		case <-tick.C:
@@ -987,11 +987,10 @@ func compareBognLmdb(index *bogn.Bogn, lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI) {
 					panic(fmt.Errorf(fmsg, bognkey, lmdbval, bognval))
 				}
 				//fmt.Printf("comparebognLmdb %q okay ...\n", llrbkey)
+				lmdbs.Scan()
+				lmdbkey, lmdbval, lmdberr = lmdbs.Key(), lmdbs.Val(), lmdbs.Err()
 			}
-
-			lmdbs.Scan()
 			bognkey, bognval, _, bogndel, bognerr = iter(false /*fin*/)
-			lmdbkey, lmdbval, lmdberr = lmdbs.Key(), lmdbs.Val(), lmdbs.Err()
 		}
 		if lmdbkey != nil {
 			return fmt.Errorf("found lmdb key %q\n", lmdbkey)
