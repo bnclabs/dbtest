@@ -913,12 +913,13 @@ func bognRange4(index *bogn.Bogn, key, value []byte) (n int64) {
 }
 
 func bognsettings(seed int) s.Settings {
+	flushratios := []float64{.5, .33, .25, .20, .16, .125, .1}
 	rnd := rand.New(rand.NewSource(int64(seed)))
+
 	setts := bogn.Defaultsettings()
 	setts["memstore"] = options.memstore
-	setts["period"] = int64(options.period)
-	ratio := []float64{.5, .33, .25, .20, .16, .125, .1}[rnd.Intn(10000)%7]
-	setts["ratio"] = ratio
+	setts["flushperiod"] = int64(options.period)
+	setts["flushratio"] = flushratios[rnd.Intn(10000)%len(flushratio)]
 	setts["bubt.mmap"] = []bool{true, false}[rnd.Intn(10000)%2]
 	setts["bubt.msize"] = []int64{4096, 8192, 12288}[rnd.Intn(10000)%3]
 	setts["bubt.zsize"] = []int64{4096, 8192, 12288}[rnd.Intn(10000)%3]
@@ -945,9 +946,11 @@ func bognsettings(seed int) s.Settings {
 	}
 
 	a, b, c := setts["durable"], setts["dgm"], setts["workingset"]
-	fmt.Printf("durable:%v dgm:%v workingset:%v\n", a, b, c)
-	a, b = setts["ratio"], setts["period"]
-	fmt.Printf("ratio:%v period:%v lsm:%v\n", a, b, options.lsm)
+	fmt.Printf("durable:%v dgm:%v workingset:%v lsm:%v\n", a, b, c, options.lsm)
+	a, b = setts["flushratio"], setts["flushperiod"]
+	fmt.Printf("flushratio:%v flushperiod:%v\n", a, b)
+	a, b = setts["compactratio"], setts["compactperiod"]
+	fmt.Printf("compactratio:%v compactperiod:%v\n", a, b)
 	a = setts["llrb.snapshottick"]
 	fmt.Printf("llrb snapshottick:%v\n", a)
 	a, b = setts["bubt.diskpaths"], setts["bubt.msize"]
