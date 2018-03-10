@@ -38,7 +38,10 @@ func testbogn() error {
 	defer lmdbenv.Close()
 	// new bogn instance.
 	bognname, bognsetts := "dbtest", bognsettings(options.seed)
-	bogn.PurgeIndex(bognname, bognsetts) // remove existing instance
+	logpath := bognsetts.String("logpath")
+	diskstore := bognsetts.String("diskstore")
+	diskpaths := bognsetts.Strings("bubt.diskpaths")
+	bogn.PurgeIndex(bognname, logpath, diskstore, diskpaths)
 	fmt.Println()
 	index, err := bogn.New(bognname, bognsetts)
 	if err != nil {
@@ -919,7 +922,7 @@ func bognsettings(seed int) s.Settings {
 	setts := bogn.Defaultsettings()
 	setts["memstore"] = options.memstore
 	setts["flushperiod"] = int64(options.period)
-	setts["flushratio"] = flushratios[rnd.Intn(10000)%len(flushratio)]
+	setts["flushratio"] = flushratios[rnd.Intn(10000)%len(flushratios)]
 	setts["bubt.mmap"] = []bool{true, false}[rnd.Intn(10000)%2]
 	setts["bubt.msize"] = []int64{4096, 8192, 12288}[rnd.Intn(10000)%3]
 	setts["bubt.zsize"] = []int64{4096, 8192, 12288}[rnd.Intn(10000)%3]
