@@ -37,8 +37,9 @@ func TestRandSource(t *testing.T) {
 func TestGenerateloads(t *testing.T) {
 	klen, vlen, n := int64(32), int64(32), int64(1*1000*1000)
 	g := Generateloads(klen, vlen, n)
-	m, now, lastkey := map[int64]bool{}, time.Now(), int64(-1)
-	for key, value := g(nil, nil); key != nil; key, value = g(key, value) {
+	m, now, lastkey, opaque := map[int64]bool{}, time.Now(), int64(-1), uint64(1)
+	key, value := g(nil, nil, opaque)
+	for ; key != nil; key, value = g(key, value, opaque) {
 		keynum, err := strconv.ParseInt(Bytes2str(key), 10, 64)
 		if err != nil {
 			t.Fatal(err)
@@ -48,6 +49,7 @@ func TestGenerateloads(t *testing.T) {
 			t.Fatalf("duplicated key %s", key)
 		}
 		m[keynum], lastkey = true, keynum
+		opaque++
 	}
 	if int64(len(m)) != n {
 		t.Fatalf("expected %v, got %v", n, len(m))
@@ -59,8 +61,9 @@ func TestGenerateloads(t *testing.T) {
 func TestGenerateloadr(t *testing.T) {
 	klen, vlen, n, seed := int64(32), int64(32), int64(1*1000*1000), int64(100)
 	g := Generateloadr(klen, vlen, n, seed)
-	m, now := map[int64]bool{}, time.Now()
-	for key, value := g(nil, nil); key != nil; key, value = g(key, value) {
+	m, now, opaque := map[int64]bool{}, time.Now(), uint64(1)
+	key, value := g(nil, nil, opaque)
+	for ; key != nil; key, value = g(key, value, opaque) {
 		keynum, err := strconv.ParseInt(Bytes2str(key), 10, 64)
 		if err != nil {
 			t.Fatal(err)
@@ -68,6 +71,7 @@ func TestGenerateloadr(t *testing.T) {
 			t.Fatalf("duplicate key %s", key)
 		}
 		m[keynum] = true
+		opaque++
 	}
 	if int64(len(m)) != n {
 		t.Fatalf("expected %v, got %v", n, len(m))
@@ -83,7 +87,9 @@ func TestGenerateCRUD(t *testing.T) {
 	// Initial load
 	klen, vlen, loadn, seedl := int64(32), int64(32), int64(1000000), int64(100)
 	g := Generateloadr(klen, vlen, loadn, seedl)
-	for key, value := g(nil, nil); key != nil; key, value = g(key, value) {
+	opaque := uint64(1)
+	key, value := g(nil, nil, opaque)
+	for ; key != nil; key, value = g(key, value, opaque) {
 		keynum, err := strconv.ParseInt(Bytes2str(key), 10, 64)
 		if err != nil {
 			t.Fatal(err)
@@ -92,6 +98,7 @@ func TestGenerateCRUD(t *testing.T) {
 		if keynum > loadmaxkey {
 			loadmaxkey = keynum
 		}
+		opaque++
 	}
 	if int64(len(loadm)) != loadn {
 		t.Fatalf("expected %v, got %v", loadn, len(loadm))
@@ -100,9 +107,9 @@ func TestGenerateCRUD(t *testing.T) {
 	createm := map[int64]bool{}
 	// Create load
 	klen, vlen = int64(32), int64(32)
-	createn, seedc := int64(1000000), int64(200)
+	createn, seedc, opaque := int64(2000000), int64(200), uint64(1)
 	g = Generatecreate(klen, vlen, loadn, seedc)
-	key, value := g(nil, nil)
+	key, value = g(nil, nil, opaque)
 	for i := int64(0); i < createn; i++ {
 		keynum, err := strconv.ParseInt(Bytes2str(key), 10, 64)
 		if err != nil {
@@ -114,8 +121,9 @@ func TestGenerateCRUD(t *testing.T) {
 		} else if keynum <= loadmaxkey {
 			t.Fatalf("%v <= %v", keynum, loadmaxkey)
 		}
+		opaque++
 		createm[keynum] = true
-		key, value = g(key, value)
+		key, value = g(key, value, opaque)
 	}
 	if int64(len(createm)) != createn {
 		t.Fatalf("expected %v, got %v", createn, len(createm))
@@ -123,9 +131,9 @@ func TestGenerateCRUD(t *testing.T) {
 
 	readl, readc := map[int64]bool{}, map[int64]bool{}
 	// read load
-	klen, readn := int64(32), int64(1000000)
+	klen, readn := int64(32), int64(1100000)
 	gr := Generateread(klen, loadn, seedl, seedc)
-	key = gr(nil)
+	key = gr(nil, createn)
 	for i := int64(0); i < readn; i++ {
 		keynum, err := strconv.ParseInt(Bytes2str(key), 10, 64)
 		if err != nil {
@@ -137,19 +145,20 @@ func TestGenerateCRUD(t *testing.T) {
 		} else {
 			t.Fatalf("generated key %s not found", key)
 		}
-		key = gr(key)
+		key = gr(key, createn)
 	}
-	if len(readl) != 424961 {
-		t.Fatalf("%v != %v", len(readl), 424961)
-	} else if len(readc) != 166235 {
-		t.Fatalf("%v != %v", len(readc), 166235)
+	if len(readl) != 850300 {
+		t.Fatalf("%v != %v", len(readl), 850300)
+	} else if len(readc) != 50000 {
+		t.Fatalf("%v != %v", len(readc), 50000)
 	}
 
 	updatel, updatec := map[int64]bool{}, map[int64]bool{}
 	// update load
-	klen, vlen, updaten := int64(32), int64(32), int64(1000000)
+	klen, vlen, updaten := int64(32), int64(32), int64(1100000)
+	opaque = uint64(1)
 	g = Generateupdate(klen, vlen, loadn, seedl, seedc, -1)
-	key, value = g(nil, nil)
+	key, value = g(nil, nil, opaque)
 	for i := int64(0); i < updaten; i++ {
 		keynum, err := strconv.ParseInt(Bytes2str(key), 10, 64)
 		if err != nil {
@@ -161,19 +170,20 @@ func TestGenerateCRUD(t *testing.T) {
 		} else {
 			t.Fatalf("generated key %s not found", key)
 		}
-		key, value = g(key, value)
+		opaque++
+		key, value = g(key, value, opaque)
 	}
-	if len(updatel) != 424961 {
-		t.Fatalf("%v != %v", len(updatel), 424961)
-	} else if len(updatec) != 166235 {
-		t.Fatalf("%v != %v", len(updatec), 166235)
+	if len(updatel) != 850300 {
+		t.Fatalf("%v != %v", len(updatel), 850300)
+	} else if len(updatec) != 33333 {
+		t.Fatalf("%v != %v", len(updatec), 33333)
 	}
 
 	deletel, deletec := map[int64]bool{}, map[int64]bool{}
 	// delete load
-	klen, deleten := int64(32), int64(1000000)
-	gd := Generatedelete(klen, loadn, seedl, seedc)
-	key = gd(nil)
+	klen, deleten, opaque := int64(32), int64(1000000), uint64(1)
+	gd := Generatedelete(klen, vlen, loadn, seedl, seedc, delmod)
+	key, value = gd(nil, nil, opaque)
 	for i := int64(0); i < deleten; i++ {
 		keynum, err := strconv.ParseInt(Bytes2str(key), 10, 64)
 		if err != nil {
@@ -185,49 +195,53 @@ func TestGenerateCRUD(t *testing.T) {
 		} else {
 			t.Fatalf("generated key %s not found", key)
 		}
-		key = gd(key)
+		opaque++
+		key, value = gd(key, value, opaque)
 	}
-	if len(deletel) != 425339 {
+	if len(deletel) != 424961 {
 		t.Fatalf("%v != %v", len(deletel), 424961)
-	} else if len(deletec) != 167111 {
-		t.Fatalf("%v != %v", len(deletec), 166235)
+	} else if len(deletec) != 166570 {
+		t.Fatalf("%v != %v", len(deletec), 166570)
 	}
 }
 
 func BenchmarkGenerateloads(b *testing.B) {
 	klen, vlen, n := int64(32), int64(32), int64(1*1000*1000)
+	opaque := uint64(1)
 	g := Generateloads(klen, vlen, n)
-	key, value := g(nil, nil)
+	key, value := g(nil, nil, opaque)
 	for i := 0; i < b.N; i++ {
-		key, value = g(key, value)
+		key, value = g(key, value, opaque+uint64(i))
 	}
 }
 
 func BenchmarkGenerateloadr(b *testing.B) {
 	klen, vlen, n, seed := int64(32), int64(32), int64(1*1000*1000), int64(100)
+	opaque := uint64(1)
 	g := Generateloadr(klen, vlen, n, seed)
-	key, value := g(nil, nil)
+	key, value := g(nil, nil, opaque)
 	for i := 0; i < b.N; i++ {
-		key, value = g(key, value)
+		key, value = g(key, value, opaque+uint64(i))
 	}
 }
 
 func BenchmarkGeneratecreate(b *testing.B) {
 	klen, vlen, n, seedc := int64(32), int64(32), int64(1*1000*1000), int64(100)
+	opaque := uint64(1)
 	g := Generatecreate(klen, vlen, n, seedc)
-	key, value := g(nil, nil)
+	key, value := g(nil, nil, opaque)
 	for i := 0; i < b.N; i++ {
-		key, value = g(key, value)
+		key, value = g(key, value, opaque+uint64(i))
 	}
 }
 
 func BenchmarkGenerateupdate(b *testing.B) {
 	klen, vlen, n := int64(32), int64(32), int64(1*1000*1000)
-	seedl, seedc := int64(100), int64(200)
+	seedl, seedc, opaque := int64(100), int64(200), uint64(1)
 	g := Generateupdate(klen, vlen, n, seedl, seedc, -1)
-	key, value := g(nil, nil)
+	key, value := g(nil, nil, opaque)
 	for i := 0; i < b.N; i++ {
-		key, value = g(key, value)
+		key, value = g(key, value, opaque+uint64(i))
 	}
 }
 
@@ -235,19 +249,19 @@ func BenchmarkGenerateread(b *testing.B) {
 	klen, n := int64(32), int64(1*1000*1000)
 	seedl, seedc := int64(100), int64(200)
 	g := Generateread(klen, n, seedl, seedc)
-	key := g(nil)
+	key := g(nil, 0)
 	for i := 0; i < b.N; i++ {
-		g(key)
+		g(key, int64(i+1))
 	}
 }
 
 func BenchmarkGeneratedelete(b *testing.B) {
 	klen, n := int64(32), int64(1*1000*1000)
-	seedl, seedc := int64(100), int64(200)
-	g := Generatedelete(klen, n, seedl, seedc)
-	key := g(nil)
+	seedl, seedc, opaque := int64(100), int64(200), uint64(1)
+	g := Generatedelete(klen, 0, n, seedl, seedc, delmod)
+	key, value := g(nil, nil, opaque)
 	for i := 0; i < b.N; i++ {
-		g(key)
+		g(key, value, opaque+uint64(i))
 	}
 }
 

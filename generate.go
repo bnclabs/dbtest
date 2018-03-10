@@ -176,7 +176,7 @@ func Generateread(klen, loadn, seedl, seedc int64) func([]byte, int64) []byte {
 	var getkey func(int64)
 
 	loadn1 := loadn * rndscale
-	intn := int64(9223372036854775807) - loadn1
+	intn := int64(9223372036854775) - loadn1
 	rndl := rand.New(rand.NewSource(seedl))
 	rndc := rand.New(rand.NewSource(seedc))
 	keynum, lcount := int64(0), int64(0)
@@ -237,7 +237,7 @@ func Generatedelete(
 	var getkey func()
 
 	loadn1 := loadn * rndscale
-	intn := int64(9223372036854775807) - loadn1
+	intn := int64(9223372036854775) - loadn1
 	rndl := rand.New(rand.NewSource(seedl))
 	rndc := rand.New(rand.NewSource(seedc))
 	keynum, lcount := int64(0), int64(0)
