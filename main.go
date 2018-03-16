@@ -28,6 +28,7 @@ var options struct {
 	period   int
 	lsm      bool
 	seed     int
+	npaths   int
 }
 
 func optparse(args []string) {
@@ -53,6 +54,7 @@ func optparse(args []string) {
 	f.StringVar(&options.memstore, "memstore", "mvcc", "llrb|mvcc for bogn")
 	f.IntVar(&options.period, "period", 10, "bogn flush period, in seconds")
 	f.BoolVar(&options.lsm, "lsm", false, "use LSM deletes")
+	f.IntVar(&options.npaths, "npaths", 1, "number of directory paths for bubt")
 	f.Parse(args)
 
 	if options.seed == 0 {
