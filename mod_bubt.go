@@ -20,11 +20,7 @@ func testbubt() error {
 	mindex := llrb.NewLLRB("dbtest", setts)
 	defer mindex.Destroy()
 
-	path, paths := os.TempDir(), []string{}
-	for i, base := range []string{"1", "2", "3"} {
-		paths = append(paths, filepath.Join(path, base))
-		fmt.Printf("Path %v %q\n", i, filepath.Join(path, base))
-	}
+	paths := bubtpaths(options.npaths)
 
 	name := "dbtest"
 	rnd := rand.New(rand.NewSource(int64(options.seed)))
@@ -73,9 +69,9 @@ func testbubt() error {
 	var rwg sync.WaitGroup
 
 	for i := 0; i < options.cpu; i++ {
-		rwg.Add(2)
 		go bubtGetter(index, int64(options.load), seed, &rwg)
 		go bubtRanger(index, int64(options.load), seed, &rwg)
+		rwg.Add(2)
 	}
 	rwg.Wait()
 	close(fin)
@@ -346,4 +342,14 @@ func generatemeta(seed int64) []byte {
 		md[i] = byte(97 + rnd.Intn(26))
 	}
 	return md
+}
+
+func bubtpaths(npaths int) []string {
+	path, paths := os.TempDir(), []string{}
+	for i := 0; i < npaths; i++ {
+		base := fmt.Sprintf("%v", i+1)
+		paths = append(paths, filepath.Join(path, base))
+		fmt.Printf("Path %v %q\n", i+1, filepath.Join(path, base))
+	}
+	return paths
 }
