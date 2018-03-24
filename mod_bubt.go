@@ -24,10 +24,14 @@ func testbubt() error {
 
 	name := "dbtest"
 	rnd := rand.New(rand.NewSource(int64(options.seed)))
-	msize := int64(4096 * (rnd.Intn(5) + 1))
-	zsize := int64(4096 * (rnd.Intn(5) + 1))
+	msizes := []int64{4096, 8192, 12288}
+	msize := msizes[rnd.Intn(10000)%len(msizes)]
+	zsizes := []int64{msize, msize * 2, msize * 4}
+	zsize := zsizes[rnd.Intn(10000)%len(zsizes)]
+	vsizes := []int64{zsize, zsize * 2, zsize * 4}
+	vsize := vsizes[rnd.Intn(10000)%len(vsizes)]
 	mmap := []bool{true, false}[rnd.Intn(10000)%2]
-	bt, err := bubt.NewBubt(name, paths, msize, zsize)
+	bt, err := bubt.NewBubt(name, paths, msize, zsize, vsize)
 	if err != nil {
 		panic(err)
 	}
@@ -37,8 +41,8 @@ func testbubt() error {
 	iter := makeiterator(klen, vlen, int64(options.load), delmod, mindex)
 	md := generatemeta(seed)
 
-	fmsg := "msize: %v zsize:%v mmap:%v mdsize:%v\n"
-	fmt.Printf(fmsg, msize, zsize, mmap, len(md))
+	fmsg := "msize: %v zsize:%v vsize: %v mmap:%v mdsize:%v\n"
+	fmt.Printf(fmsg, msize, zsize, vsize, mmap, len(md))
 
 	now := time.Now()
 	bt.Build(iter, md)
@@ -116,10 +120,10 @@ func bubtvalidator(
 				panic(merr)
 			} else if bytes.Compare(mkey, key) != 0 {
 				panic(fmt.Errorf("%s != %s", mkey, key))
-			} else if bytes.Compare(mvalue, value) != 0 {
-				panic(fmt.Errorf("for %s : %s != %s", key, mvalue, value))
 			} else if del != mdel {
 				panic(fmt.Errorf("for %s : %v != %v", key, mdel, del))
+			} else if del == false && bytes.Compare(mvalue, value) != 0 {
+				panic(fmt.Errorf("for %s : %s != %s", key, mvalue, value))
 			}
 			mkey, mvalue, _, mdel, merr = mcur.YNext(false /*fin*/)
 			key, value, _, del, err = cur.YNext(false /*fin*/)
@@ -221,8 +225,8 @@ func bubtGet2(
 			panic(fmt.Errorf("expected %v, got %v", del, cdel))
 		} else if bytes.Compare(ckey, key) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, ckey))
-		} else if cvalue := cur.Value(); bytes.Compare(cvalue, value) != 0 {
-			panic(fmt.Errorf("%q expected %q, got %q", key, value, cvalue))
+		} else if cv := cur.Value(); del == false && bytes.Compare(cv, value) != 0 {
+			panic(fmt.Errorf("%q expected %q, got %q", key, value, cv))
 		}
 	}
 	view.Abort()

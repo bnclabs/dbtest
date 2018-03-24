@@ -151,7 +151,9 @@ func bognvalidator(
 
 func bognLoad(index *bogn.Bogn, seedl int64) error {
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
+	g := Generateloadr(
+		klen, vlen, int64(options.load), int64(seedl), options.randwidth,
+	)
 
 	now, oldvalue := time.Now(), make([]byte, 16)
 	opaque := atomic.AddUint64(&seqno, 1)
@@ -183,7 +185,8 @@ func bognCreater(
 	defer wg.Done()
 
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	g := Generatecreate(klen, vlen, n, seedc)
+	writes := int64(options.writes)
+	g := Generatecreate(klen, vlen, n, writes, seedc, options.randwidth)
 
 	key, value := make([]byte, 16), make([]byte, 16)
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
@@ -264,7 +267,8 @@ func bognUpdater(
 	var nupdates int64
 	var key, value []byte
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	g := Generateupdate(klen, vlen, n, seedl, seedc, -1)
+	writes := int64(options.writes)
+	g := Generateupdate(klen, vlen, n, writes, seedl, seedc, -1, options.randwidth)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
@@ -461,7 +465,10 @@ func bognDeleter(
 	var ndeletes, xdeletes int64
 	var key, value []byte
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	g := Generatedelete(klen, vlen, n, seedl, seedc, delmod)
+	writes := int64(options.writes)
+	g := Generatedelete(
+		klen, vlen, n, writes, seedl, seedc, delmod, options.randwidth,
+	)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
@@ -633,7 +640,10 @@ func bognGetter(
 	var ngets, nmisses int64
 	var key []byte
 	var del bool
-	g := Generateread(int64(options.keylen), n, seedl, seedc)
+	writes := int64(options.writes)
+	g := Generateread(
+		int64(options.keylen), n, writes, seedl, seedc, options.randwidth,
+	)
 
 	rnd := rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(10000000)
@@ -794,7 +804,10 @@ func bognRanger(
 
 	var nranges int64
 	var key []byte
-	g := Generateread(int64(options.keylen), n, seedl, seedc)
+	writes := int64(options.writes)
+	g := Generateread(
+		int64(options.keylen), n, writes, seedl, seedc, options.randwidth,
+	)
 
 	rnd := rand.New(rand.NewSource(seedc))
 	epoch, value := time.Now(), make([]byte, 16)
@@ -924,8 +937,15 @@ func bognsettings(seed int) s.Settings {
 	setts["flushperiod"] = int64(options.period)
 	setts["flushratio"] = flushratios[rnd.Intn(10000)%len(flushratios)]
 	setts["bubt.mmap"] = []bool{true, false}[rnd.Intn(10000)%2]
-	setts["bubt.msize"] = []int64{4096, 8192, 12288}[rnd.Intn(10000)%3]
-	setts["bubt.zsize"] = []int64{4096, 8192, 12288}[rnd.Intn(10000)%3]
+	msizes := []int64{4096, 8192, 12288}
+	msize := msizes[rnd.Intn(10000)%len(msizes)]
+	setts["bubt.mblocksize"] = msize
+	zsizes := []int64{msize, msize * 2, msize * 4}
+	zsize := zsizes[rnd.Intn(10000)%len(zsizes)]
+	setts["bubt.zblocksize"] = zsize
+	vsizes := []int64{zsize, zsize * 2, zsize * 4}
+	vsize := vsizes[rnd.Intn(10000)%len(vsizes)]
+	setts["bubt.vblocksize"] = vsizes[rnd.Intn(10000)%len(vsizes)]
 	setts["llrb.memcapacity"] = options.capacity
 	setts["llrb.allocator"] = "flist"
 	setts["llrb.snapshottick"] = []int64{4, 8, 16, 32}[rnd.Intn(10000)%4]
@@ -956,9 +976,9 @@ func bognsettings(seed int) s.Settings {
 	fmt.Printf("compactratio:%v compactperiod:%v\n", a, b)
 	a = setts["llrb.snapshottick"]
 	fmt.Printf("llrb snapshottick:%v\n", a)
-	a, b = setts["bubt.diskpaths"], setts["bubt.msize"]
-	c, d := setts["bubt.zsize"], setts["bubt.mmap"]
-	fmt.Printf("bubt diskpaths:%v msize:%v zsize:%v mmap:%v\n", a, b, c, d)
+	a, b = setts["bubt.diskpaths"], setts["bubt.mmap"]
+	fmsg := "bubt diskpaths:%v msize:%v zsize:%v vsize:%v mmap:%v\n"
+	fmt.Printf(fmsg, a, msize, zsize, vsize, b)
 	fmt.Println()
 
 	return setts

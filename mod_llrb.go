@@ -150,7 +150,9 @@ func (t *TestLLRB) badgload(badg *badger.DB, klen, vlen, loadn, seedl int64) {
 
 func (t *TestLLRB) llrbload(seedl int64) error {
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
+	g := Generateloadr(
+		klen, vlen, int64(options.load), int64(seedl), options.randwidth,
+	)
 
 	now, oldvalue := time.Now(), make([]byte, 16)
 	opaque := atomic.AddUint64(&seqno, 1)
@@ -393,7 +395,8 @@ func (t *TestLLRB) lmdbCreater(
 	}
 
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	g := Generatecreate(klen, vlen, n, seedc)
+	writes := int64(options.writes)
+	g := Generatecreate(klen, vlen, n, writes, seedc, options.randwidth)
 
 	key, value := make([]byte, 16), make([]byte, 16)
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
@@ -458,7 +461,8 @@ func (t *TestLLRB) badgCreater(
 	}
 
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	g := Generatecreate(klen, vlen, n, seedc)
+	writes := int64(options.writes)
+	g := Generatecreate(klen, vlen, n, writes, seedc, options.randwidth)
 
 	key, value := make([]byte, 16), make([]byte, 16)
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
@@ -525,7 +529,10 @@ func (t *TestLLRB) lmdbUpdater(
 	var nupdates int64
 	var key, value []byte
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	g := Generateupdate(klen, vlen, n, seedl, seedc, -1)
+	writes := int64(options.writes)
+	g := Generateupdate(
+		klen, vlen, n, writes, seedl, seedc, -1, options.randwidth,
+	)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
@@ -594,7 +601,10 @@ func (t *TestLLRB) badgUpdater(
 	var nupdates int64
 	var key, value []byte
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	g := Generateupdate(klen, vlen, n, seedl, seedc, -1)
+	writes := int64(options.writes)
+	g := Generateupdate(
+		klen, vlen, n, writes, seedl, seedc, -1, options.randwidth,
+	)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
@@ -764,7 +774,10 @@ func (t *TestLLRB) lmdbDeleter(
 	var ndeletes, xdeletes int64
 	var key, value []byte
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	g := Generatedelete(klen, vlen, n, seedl, seedc, delmod)
+	writes := int64(options.writes)
+	g := Generatedelete(
+		klen, vlen, n, writes, seedl, seedc, delmod, options.randwidth,
+	)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
@@ -851,7 +864,10 @@ func (t *TestLLRB) badgDeleter(
 	var ndeletes, xdeletes int64
 	var key, value []byte
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	g := Generatedelete(klen, vlen, n, seedl, seedc, delmod)
+	writes := int64(options.writes)
+	g := Generatedelete(
+		klen, vlen, n, writes, seedl, seedc, delmod, options.randwidth,
+	)
 
 	oldvalue, rnd := make([]byte, 16), rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(1000000)
@@ -1058,7 +1074,10 @@ func (t *TestLLRB) lmdbGetter(
 	var ngets, nmisses int64
 	var key []byte
 	var del bool
-	g := Generateread(int64(options.keylen), n, seedl, seedc)
+	writes := int64(options.writes)
+	g := Generateread(
+		int64(options.keylen), n, writes, seedl, seedc, options.randwidth,
+	)
 
 	rnd := rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(10000000)
@@ -1224,7 +1243,10 @@ func (t *TestLLRB) badgGetter(
 	var ngets, nmisses int64
 	var key []byte
 	var del bool
-	g := Generateread(int64(options.keylen), n, seedl, seedc)
+	writes := int64(options.writes)
+	g := Generateread(
+		int64(options.keylen), n, writes, seedl, seedc, options.randwidth,
+	)
 
 	rnd := rand.New(rand.NewSource(seedc))
 	epoch, now, markercount := time.Now(), time.Now(), int64(10000000)
@@ -1388,7 +1410,10 @@ func (t *TestLLRB) Ranger(
 
 	var nranges int64
 	var key []byte
-	g := Generateread(int64(options.keylen), n, seedl, seedc)
+	writes := int64(options.writes)
+	g := Generateread(
+		int64(options.keylen), n, writes, seedl, seedc, options.randwidth,
+	)
 
 	rnd := rand.New(rand.NewSource(seedc))
 	epoch, value := time.Now(), make([]byte, 16)

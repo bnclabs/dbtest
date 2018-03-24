@@ -79,7 +79,8 @@ type badgerop struct {
 }
 
 func badgerload(badg *badger.DB, klen, vlen, loadn, seedl int64) error {
-	g, count := Generateloadr(klen, vlen, loadn, seedl), int64(0)
+	g := Generateloadr(klen, vlen, loadn, seedl, options.randwidth)
+	count := int64(0)
 
 	cmds := make([]*badgerop, 10000)
 	for off := range cmds {
@@ -130,7 +131,8 @@ func badgerCreater(
 
 	var key, value []byte
 
-	g := Generatecreate(klen, vlen, loadn, seedc)
+	writes := int64(options.writes)
+	g := Generatecreate(klen, vlen, loadn, writes, seedc, options.randwidth)
 
 	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
@@ -183,7 +185,10 @@ func badgerUpdater(
 	var nupdates int64
 	var key, value []byte
 
-	g := Generateupdate(klen, vlen, loadn, seedl, seedc, -1)
+	writes := int64(options.writes)
+	g := Generateupdate(
+		klen, vlen, loadn, writes, seedl, seedc, -1, options.randwidth,
+	)
 
 	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
@@ -240,7 +245,10 @@ func badgerDeleter(
 	var xdeletes, ndeletes int64
 	var key, value []byte
 
-	g := Generatedelete(klen, vlen, loadn, seedl, seedc, delmod)
+	writes := int64(options.writes)
+	g := Generatedelete(
+		klen, vlen, loadn, writes, seedl, seedc, delmod, options.randwidth,
+	)
 
 	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
@@ -303,7 +311,8 @@ func badgerGetter(
 	var ngets, nmisses int64
 	var key []byte
 
-	g := Generateread(klen, loadn, seedl, seedc)
+	writes := int64(options.writes)
+	g := Generateread(klen, loadn, writes, seedl, seedc, options.randwidth)
 
 	get := func(txn *badger.Txn) (err error) {
 		ngets++
@@ -362,7 +371,8 @@ func badgerRanger(
 
 	var nranges, nmisses int64
 	var key []byte
-	g := Generateread(klen, loadn, seedl, seedc)
+	writes := int64(options.writes)
+	g := Generateread(klen, loadn, writes, seedl, seedc, options.randwidth)
 
 	ranger := func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions

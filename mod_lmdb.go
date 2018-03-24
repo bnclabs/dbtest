@@ -153,7 +153,9 @@ func lmdbLoad(env *lmdb.Env, dbi lmdb.DBI, seedl int64) error {
 	now := time.Now()
 
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	g := Generateloadr(klen, vlen, int64(options.load), int64(seedl))
+	g := Generateloadr(
+		klen, vlen, int64(options.load), int64(seedl), options.randwidth,
+	)
 
 	populate := func(txn *lmdb.Txn) (err error) {
 		opaque := atomic.AddUint64(&seqno, 1)
@@ -189,7 +191,8 @@ func lmdbCreater(
 
 	var key, value []byte
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	g := Generatecreate(klen, vlen, n, seedc)
+	writes := int64(options.writes)
+	g := Generatecreate(klen, vlen, n, writes, seedc, options.randwidth)
 
 	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 	//entries := int64(float64(options.entries) * 1.1)
@@ -240,7 +243,10 @@ func lmdbUpdater(
 	var nupdates int64
 	var key, value []byte
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	g := Generateupdate(klen, vlen, n, seedl, seedc, -1)
+	writes := int64(options.writes)
+	g := Generateupdate(
+		klen, vlen, n, writes, seedl, seedc, -1, options.randwidth,
+	)
 
 	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
@@ -291,16 +297,17 @@ func lmdbDeleter(
 	var xdeletes, ndeletes int64
 	var key, value []byte
 	klen, vlen := int64(options.keylen), int64(options.vallen)
-	g := Generatedelete(klen, vlen, n, seedl, seedc, delmod)
+	writes := int64(options.writes)
+	g := Generatedelete(
+		klen, vlen, n, writes, seedl, seedc, delmod, options.randwidth,
+	)
 
 	epoch, now, markercount := time.Now(), time.Now(), int64(100000)
 	//entries := int64(float64(options.entries) * 1.1)
 	for atomic.LoadInt64(&totalwrites) < int64(options.writes) {
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
-		if x, err := lmdbDodelete(env, dbi, key, value); err != nil {
-			return
-		} else if x {
+		if _, err := lmdbDodelete(env, dbi, key, value); err != nil {
 			xdeletes++
 		} else {
 			ndeletes++
@@ -352,7 +359,10 @@ func lmdbGetter(
 
 	var ngets, nmisses int64
 	var key []byte
-	g := Generateread(int64(options.keylen), n, seedl, seedc)
+	writes := int64(options.writes)
+	g := Generateread(
+		int64(options.keylen), n, writes, seedl, seedc, options.randwidth,
+	)
 
 	get := func(txn *lmdb.Txn) (err error) {
 		ngets++
@@ -411,7 +421,10 @@ func lmdbRanger(
 
 	var nranges, nmisses int64
 	var key []byte
-	g := Generateread(int64(options.keylen), n, seedl, seedc)
+	writes := int64(options.writes)
+	g := Generateread(
+		int64(options.keylen), n, writes, seedl, seedc, options.randwidth,
+	)
 
 	ranger := func(txn *lmdb.Txn) error {
 		cur, err := txn.OpenCursor(dbi)

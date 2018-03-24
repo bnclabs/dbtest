@@ -60,7 +60,7 @@ func TestGenerateloads(t *testing.T) {
 
 func TestGenerateloadr(t *testing.T) {
 	klen, vlen, n, seed := int64(32), int64(32), int64(1*1000*1000), int64(100)
-	g := Generateloadr(klen, vlen, n, seed)
+	g := Generateloadr(klen, vlen, n, seed, false)
 	m, now, opaque := map[int64]bool{}, time.Now(), uint64(1)
 	key, value := g(nil, nil, opaque)
 	for ; key != nil; key, value = g(key, value, opaque) {
@@ -86,7 +86,7 @@ func TestGenerateCRUD(t *testing.T) {
 
 	// Initial load
 	klen, vlen, loadn, seedl := int64(32), int64(32), int64(1000000), int64(100)
-	g := Generateloadr(klen, vlen, loadn, seedl)
+	g := Generateloadr(klen, vlen, loadn, seedl, false)
 	opaque := uint64(1)
 	key, value := g(nil, nil, opaque)
 	for ; key != nil; key, value = g(key, value, opaque) {
@@ -108,7 +108,7 @@ func TestGenerateCRUD(t *testing.T) {
 	// Create load
 	klen, vlen = int64(32), int64(32)
 	createn, seedc, opaque := int64(2000000), int64(200), uint64(1)
-	g = Generatecreate(klen, vlen, loadn, seedc)
+	g = Generatecreate(klen, vlen, loadn, createn, seedc, false /*randwidth*/)
 	key, value = g(nil, nil, opaque)
 	for i := int64(0); i < createn; i++ {
 		keynum, err := strconv.ParseInt(Bytes2str(key), 10, 64)
@@ -127,12 +127,14 @@ func TestGenerateCRUD(t *testing.T) {
 	}
 	if int64(len(createm)) != createn {
 		t.Fatalf("expected %v, got %v", createn, len(createm))
+	} else if x, y := int64(len(createm)+len(loadm)), createn+loadn; x != y {
+		t.Fatalf("expected %v, got %v", x, y)
 	}
 
 	readl, readc := map[int64]bool{}, map[int64]bool{}
 	// read load
 	klen, readn := int64(32), int64(1100000)
-	gr := Generateread(klen, loadn, seedl, seedc)
+	gr := Generateread(klen, loadn, createn, seedl, seedc, false)
 	key = gr(nil, createn)
 	for i := int64(0); i < readn; i++ {
 		keynum, err := strconv.ParseInt(Bytes2str(key), 10, 64)
@@ -149,15 +151,15 @@ func TestGenerateCRUD(t *testing.T) {
 	}
 	if len(readl) != 850300 {
 		t.Fatalf("%v != %v", len(readl), 850300)
-	} else if len(readc) != 50000 {
-		t.Fatalf("%v != %v", len(readc), 50000)
+	} else if len(readc) != 49805 {
+		t.Fatalf("%v != %v", len(readc), 49805)
 	}
 
 	updatel, updatec := map[int64]bool{}, map[int64]bool{}
 	// update load
 	klen, vlen, updaten := int64(32), int64(32), int64(1100000)
 	opaque = uint64(1)
-	g = Generateupdate(klen, vlen, loadn, seedl, seedc, -1)
+	g = Generateupdate(klen, vlen, loadn, createn, seedl, seedc, -1, false)
 	key, value = g(nil, nil, opaque)
 	for i := int64(0); i < updaten; i++ {
 		keynum, err := strconv.ParseInt(Bytes2str(key), 10, 64)
@@ -168,21 +170,21 @@ func TestGenerateCRUD(t *testing.T) {
 		} else if _, ok := createm[keynum]; ok {
 			updatec[keynum] = true
 		} else {
-			t.Fatalf("generated key %s not found", key)
+			t.Fatalf("generated key %s not found, iter:%v", key, i)
 		}
 		opaque++
 		key, value = g(key, value, opaque)
 	}
 	if len(updatel) != 850300 {
 		t.Fatalf("%v != %v", len(updatel), 850300)
-	} else if len(updatec) != 33333 {
-		t.Fatalf("%v != %v", len(updatec), 33333)
+	} else if len(updatec) != 33248 {
+		t.Fatalf("%v != %v", len(updatec), 33248)
 	}
 
 	deletel, deletec := map[int64]bool{}, map[int64]bool{}
 	// delete load
 	klen, deleten, opaque := int64(32), int64(1000000), uint64(1)
-	gd := Generatedelete(klen, vlen, loadn, seedl, seedc, delmod)
+	gd := Generatedelete(klen, vlen, loadn, createn, seedl, seedc, delmod, false)
 	key, value = gd(nil, nil, opaque)
 	for i := int64(0); i < deleten; i++ {
 		keynum, err := strconv.ParseInt(Bytes2str(key), 10, 64)
@@ -200,13 +202,13 @@ func TestGenerateCRUD(t *testing.T) {
 	}
 	if len(deletel) != 424961 {
 		t.Fatalf("%v != %v", len(deletel), 424961)
-	} else if len(deletec) != 166570 {
-		t.Fatalf("%v != %v", len(deletec), 166570)
+	} else if len(deletec) != 162202 {
+		t.Fatalf("%v != %v", len(deletec), 162202)
 	}
 }
 
 func BenchmarkGenerateloads(b *testing.B) {
-	klen, vlen, n := int64(32), int64(32), int64(1*1000*1000)
+	klen, vlen, n := int64(32), int64(32), int64(10*1000*1000)
 	opaque := uint64(1)
 	g := Generateloads(klen, vlen, n)
 	key, value := g(nil, nil, opaque)
@@ -216,9 +218,9 @@ func BenchmarkGenerateloads(b *testing.B) {
 }
 
 func BenchmarkGenerateloadr(b *testing.B) {
-	klen, vlen, n, seed := int64(32), int64(32), int64(1*1000*1000), int64(100)
+	klen, vlen, n, seed := int64(32), int64(32), int64(10*1000*1000), int64(100)
 	opaque := uint64(1)
-	g := Generateloadr(klen, vlen, n, seed)
+	g := Generateloadr(klen, vlen, n, seed, false)
 	key, value := g(nil, nil, opaque)
 	for i := 0; i < b.N; i++ {
 		key, value = g(key, value, opaque+uint64(i))
@@ -226,9 +228,9 @@ func BenchmarkGenerateloadr(b *testing.B) {
 }
 
 func BenchmarkGeneratecreate(b *testing.B) {
-	klen, vlen, n, seedc := int64(32), int64(32), int64(1*1000*1000), int64(100)
+	klen, vlen, n, seedc := int64(32), int64(32), int64(10*1000*1000), int64(100)
 	opaque := uint64(1)
-	g := Generatecreate(klen, vlen, n, seedc)
+	g := Generatecreate(klen, vlen, n, n, seedc, false /*randwidth*/)
 	key, value := g(nil, nil, opaque)
 	for i := 0; i < b.N; i++ {
 		key, value = g(key, value, opaque+uint64(i))
@@ -236,9 +238,9 @@ func BenchmarkGeneratecreate(b *testing.B) {
 }
 
 func BenchmarkGenerateupdate(b *testing.B) {
-	klen, vlen, n := int64(32), int64(32), int64(1*1000*1000)
+	klen, vlen, n := int64(32), int64(32), int64(10*1000*1000)
 	seedl, seedc, opaque := int64(100), int64(200), uint64(1)
-	g := Generateupdate(klen, vlen, n, seedl, seedc, -1)
+	g := Generateupdate(klen, vlen, n, n, seedl, seedc, -1, false)
 	key, value := g(nil, nil, opaque)
 	for i := 0; i < b.N; i++ {
 		key, value = g(key, value, opaque+uint64(i))
@@ -246,9 +248,9 @@ func BenchmarkGenerateupdate(b *testing.B) {
 }
 
 func BenchmarkGenerateread(b *testing.B) {
-	klen, n := int64(32), int64(1*1000*1000)
+	klen, n := int64(32), int64(10*1000*1000)
 	seedl, seedc := int64(100), int64(200)
-	g := Generateread(klen, n, seedl, seedc)
+	g := Generateread(klen, n, n, seedl, seedc, false)
 	key := g(nil, 0)
 	for i := 0; i < b.N; i++ {
 		g(key, int64(i+1))
@@ -256,9 +258,9 @@ func BenchmarkGenerateread(b *testing.B) {
 }
 
 func BenchmarkGeneratedelete(b *testing.B) {
-	klen, n := int64(32), int64(1*1000*1000)
+	klen, n := int64(32), int64(10*1000*1000)
 	seedl, seedc, opaque := int64(100), int64(200), uint64(1)
-	g := Generatedelete(klen, 0, n, seedl, seedc, delmod)
+	g := Generatedelete(klen, 0, n, n, seedl, seedc, delmod, false)
 	key, value := g(nil, nil, opaque)
 	for i := 0; i < b.N; i++ {
 		g(key, value, opaque+uint64(i))

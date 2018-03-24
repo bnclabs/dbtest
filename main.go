@@ -14,21 +14,25 @@ import "github.com/cloudfoundry/gosigar"
 // TODO: add Validate for llrb and mvcc.
 
 var options struct {
-	db       string
-	ref      string
-	cpu      int
-	load     int
-	writes   int
-	reads    int
-	keylen   int
-	vallen   int
-	bogn     string
-	capacity int
-	memstore string
-	period   int
-	lsm      bool
-	seed     int
-	npaths   int
+	db        string
+	ref       string
+	cpu       int
+	load      int
+	writes    int
+	reads     int
+	keylen    int
+	vallen    int
+	bogn      string
+	capacity  int
+	memstore  string
+	period    int
+	lsm       bool
+	seed      int
+	randwidth bool
+	npaths    int
+	msize     int
+	zsize     int
+	vsize     int
 }
 
 func optparse(args []string) {
@@ -55,6 +59,10 @@ func optparse(args []string) {
 	f.IntVar(&options.period, "period", 10, "bogn flush period, in seconds")
 	f.BoolVar(&options.lsm, "lsm", false, "use LSM deletes")
 	f.IntVar(&options.npaths, "npaths", 1, "number of directory paths for bubt")
+	f.BoolVar(&options.randwidth, "randwidth", false, "generate keys and values of random width")
+	f.IntVar(&options.msize, "msize", 4096, "bubt option, m-block size")
+	f.IntVar(&options.zsize, "zsize", 4096, "bubt option, z-block size")
+	f.IntVar(&options.vsize, "vsize", 4096*2, "bubt option, value log block size")
 	f.Parse(args)
 
 	if options.seed == 0 {
