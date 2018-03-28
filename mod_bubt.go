@@ -57,6 +57,9 @@ func testbubt() error {
 	defer index.Destroy()
 	defer index.Close()
 
+	index.Validate()
+	index.Log()
+
 	if index.Count() != int64(options.load) {
 		panic(fmt.Errorf("expected %v, got %v", options.load, index.Count()))
 	} else if index.ID() != name {
@@ -350,6 +353,9 @@ func generatemeta(seed int64) []byte {
 
 func bubtpaths(npaths int) []string {
 	path, paths := os.TempDir(), []string{}
+	if npaths == 0 {
+		npaths = (rand.Intn(10000) % 3) + 1
+	}
 	for i := 0; i < npaths; i++ {
 		base := fmt.Sprintf("%v", i+1)
 		paths = append(paths, filepath.Join(path, base))

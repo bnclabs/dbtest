@@ -4,11 +4,15 @@ import "os"
 import "fmt"
 import "flag"
 import "time"
+import "strings"
 import "runtime"
 import "net/http"
 import _ "net/http/pprof"
 
 import "github.com/bnclabs/golog"
+import "github.com/bnclabs/gostore/llrb"
+import "github.com/bnclabs/gostore/bubt"
+import "github.com/bnclabs/gostore/bogn"
 import "github.com/cloudfoundry/gosigar"
 
 // TODO: add Validate for llrb and mvcc.
@@ -31,6 +35,7 @@ var options struct {
 	randwidth bool
 	npaths    int
 	msize     int
+	log       string
 }
 
 func optparse(args []string) {
@@ -56,9 +61,10 @@ func optparse(args []string) {
 	f.StringVar(&options.memstore, "memstore", "mvcc", "llrb|mvcc for bogn")
 	f.IntVar(&options.period, "period", 10, "bogn flush period, in seconds")
 	f.BoolVar(&options.lsm, "lsm", false, "use LSM deletes")
-	f.IntVar(&options.npaths, "npaths", 1, "number of directory paths for bubt")
+	f.IntVar(&options.npaths, "npaths", 0, "number of directory paths for bubt")
 	f.BoolVar(&options.randwidth, "randwidth", false, "generate keys and values of random width")
 	f.IntVar(&options.msize, "msize", 4096, "bubt option, m-block size")
+	f.StringVar(&options.log, "log", "", "llrb,mvcc,bubt,bogn")
 	f.Parse(args)
 
 	if options.seed == 0 {
@@ -67,6 +73,21 @@ func optparse(args []string) {
 	if options.vallen > 0 && options.vallen < 16 {
 		fmt.Println("value length should be atleast 16 bytes")
 		os.Exit(1)
+	}
+
+	for _, comp := range strings.Split(options.log, ",") {
+		switch comp {
+		case "bubt":
+			bubt.LogComponents("self")
+		case "bogn":
+			bogn.LogComponents("self")
+		case "llrb", "mvcc":
+			llrb.LogComponents("self")
+		case "all":
+			bubt.LogComponents("all")
+			bogn.LogComponents("all")
+			llrb.LogComponents("all")
+		}
 	}
 }
 
