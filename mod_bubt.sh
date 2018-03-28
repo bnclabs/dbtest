@@ -10,7 +10,7 @@ echo "./dbtest $ARGS $LOADS $READS"
 ./dbtest $ARGS $LOADS $READS
 echo
 
-echo -e "#########################################\n"
+echo -e "#### with random ########################\n"
 ARGS="-db bubt -key 32 -value 1024 -randwidth"
 LOADS="-load 10000000"
 READS="-reads 60000000"
