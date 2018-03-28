@@ -1,8 +1,17 @@
-rm dbtest
-go build
+#! /usr/bin/env bash
 
-TESTARGS="-load 1000000 -writes 4000000"
-cmdargs="-db bogn -bogn memonly -lsm $TESTARGS"
+rm dbtest; go build
 
-echo "./dbtest $cmdargs"
-./dbtest $cmdargs
+echo -e "#########################################\n"
+ARGS="-db bogn -bogn memonly -lsm -key 32 -value 1024"
+OPS="-load 1000000 -writes 4000000"
+echo "./dbtest $ARGS $OPS"
+./dbtest $ARGS $OPS
+echo
+
+echo -e "#########################################\n"
+ARGS="-db bogn -bogn memonly -lsm -randwidth -key 32 -value 1024"
+OPS="-load 1000000 -writes 4000000"
+echo "./dbtest $ARGS $OPS"
+./dbtest $ARGS $OPS
+echo

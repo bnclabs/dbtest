@@ -1,7 +1,17 @@
-rm dbtest
-go build
+#! /usr/bin/env bash
 
-cmdargs="-db bogn -bogn workset -load 1000000 -writes 40000000 -lsm"
+rm dbtest; go build
 
-echo "./dbtest $cmdargs"
-./dbtest $cmdargs
+echo -e "#########################################\n"
+ARGS="-db bogn -bogn workset -lsm -key 32 -value 1024"
+OPS="-load 1000000 -writes 40000000"
+echo "./dbtest $ARGS $OPS"
+./dbtest $ARGS $OPS
+echo
+
+echo -e "#########################################\n"
+ARGS="-db bogn -bogn workset -lsm -randwidth -key 32 -value 1024"
+OPS="-load 1000000 -writes 40000000"
+echo "./dbtest $ARGS $OPS"
+./dbtest $ARGS $OPS
+echo

@@ -1,10 +1,17 @@
-rm dbtest
-go build
+#! /usr/bin/env bash
 
-cmdargs="-db lmdb -load 1000000 -writes 4000000"
-echo "./dbtest $cmdargs"
-./dbtest $cmdargs
+rm dbtest; go build
 
-cmdargs="-db lmdb -load 1000000 -writes 4000000 -randwidth"
-echo "./dbtest $cmdargs"
-./dbtest $cmdargs
+echo -e "#########################################\n"
+ARGS="-db lmdb -key 32 -value 1024"
+OPS="-load 1000000 -writes 4000000"
+echo "./dbtest $ARGS $OPS"
+./dbtest $ARGS $OPS
+echo
+
+echo -e "#########################################\n"
+ARGS="-db lmdb -key 32 -value 1024 -randwidth"
+OPS="-load 1000000 -writes 4000000"
+echo "./dbtest $ARGS $OPS"
+./dbtest $ARGS $OPS
+echo

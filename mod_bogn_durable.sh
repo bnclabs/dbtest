@@ -1,9 +1,17 @@
-rm dbtest
-go build
+#! /usr/bin/env bash
 
-TESTARGS="-load 1000000 -writes 4000000 -period 25"
-KVOPTIONS="-key 32 -value 64 "
-cmdargs="-db bogn -bogn durable -lsm $TESTARGS $KVOPTIONS"
+rm dbtest; go build
 
-echo "./dbtest $cmdargs"
-./dbtest $cmdargs
+echo -e "#########################################\n"
+ARGS="-db bogn -bogn durable -lsm -period 25 -key 32 -value 1024"
+OPS="-load 1000000 -writes 4000000"
+echo "./dbtest $ARGS $OPS"
+./dbtest $ARGS $OPS
+echo
+
+echo -e "#########################################\n"
+ARGS="-db bogn -bogn durable -lsm -period 25 -key 32 -value 1024 -randwidth"
+OPS="-load 1000000 -writes 4000000"
+echo "./dbtest $ARGS $OPS"
+./dbtest $ARGS $OPS
+echo

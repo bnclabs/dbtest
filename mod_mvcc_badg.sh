@@ -1,10 +1,17 @@
-rm dbtest
-go build
+#! /usr/bin/env bash
 
-cmdargs="-db mvcc -ref badg -load 1000000 -writes 4000000 -lsm"
-echo "./dbtest $cmdargs"
-./dbtest $cmdargs
+rm dbtest; go build
 
-cmdargs="-db mvcc -ref badg -value 256 -load 1000000 -writes 4000000 -lsm -randwidth"
-echo "./dbtest $cmdargs"
-./dbtest $cmdargs
+echo -e "#########################################\n"
+ARGS="-db mvcc -ref badg -lsm -key 32 -value 1024"
+OPS="-load 1000000 -writes 4000000"
+echo "./dbtest $ARGS $OPS"
+./dbtest $ARGS $OPS
+echo
+
+echo -e "#########################################\n"
+ARGS="-db mvcc -ref badg -lsm -randwidth -key 32 -value 1024"
+OPS="-load 1000000 -writes 4000000"
+echo "./dbtest $ARGS $OPS"
+./dbtest $ARGS $OPS
+echo

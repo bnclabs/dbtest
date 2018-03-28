@@ -1,5 +1,6 @@
-rm dbtest
-go build
+#! /usr/bin/env bash
+
+rm dbtest; go build
 
 CASEARGS="-seed 1514729382401081000"
 TESTARGS="-load 1000000 -writes 40000000"
