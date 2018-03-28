@@ -26,9 +26,9 @@ func testbubt() error {
 	rnd := rand.New(rand.NewSource(int64(options.seed)))
 	msizes := []int64{4096, 8192, 12288}
 	msize := msizes[rnd.Intn(10000)%len(msizes)]
-	zsizes := []int64{msize, msize * 2, msize * 4}
+	zsizes := []int64{0, 0, msize, msize * 2, msize * 4}
 	zsize := zsizes[rnd.Intn(10000)%len(zsizes)]
-	vsizes := []int64{zsize, zsize * 2, zsize * 4}
+	vsizes := []int64{0, 0, zsize, zsize * 2, zsize * 4}
 	vsize := vsizes[rnd.Intn(10000)%len(vsizes)]
 	mmap := []bool{true, false}[rnd.Intn(10000)%2]
 	bt, err := bubt.NewBubt(name, paths, msize, zsize, vsize)
