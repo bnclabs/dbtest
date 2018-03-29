@@ -364,7 +364,7 @@ func bubtpaths(npaths int) []string {
 		if err := os.RemoveAll(path); err != nil {
 			panic(err)
 		}
-		if err := os.MkdirAll(path); err != nil {
+		if err := os.MkdirAll(path, 0755); err != nil {
 			panic(err)
 		}
 	}
