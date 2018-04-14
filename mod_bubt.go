@@ -319,26 +319,34 @@ func bubtRange2(index *bubt.Snapshot, key, value []byte) (n int64) {
 }
 
 func makeiterator(
-	klen, vlen, entries, mod int64, mindex *llrb.LLRB) api.Iterator {
+	klen, vlen, entries, mod int64, mindex *llrb.LLRB) api.EntryIterator {
 
 	g := Generateloads(klen, vlen, entries)
-	key, value := make([]byte, 16), make([]byte, 16)
+	entry := &indexentry{
+		key: make([]byte, 0, 16), value: make([]byte, 0, 16),
+		seqno: 0, deleted: false, err: nil,
+	}
 
-	return func(fin bool) ([]byte, []byte, uint64, bool, error) {
+	return func(fin bool) api.IndexEntry {
 		opaque := atomic.AddUint64(&seqno, 1)
-		key, value = g(key, value, opaque)
-		if key != nil {
-			x, _ := strconv.Atoi(Bytes2str(key))
-			deleted := false
-			mindex.Set(key, value, nil)
+		entry.key, entry.value = g(entry.key, entry.value, opaque)
+		entry.seqno = opaque
+		if entry.key != nil {
+			x, _ := strconv.Atoi(Bytes2str(entry.key))
+			entry.deleted = false
+			mindex.Set(entry.key, entry.value, nil)
 			if (int64(x) % 2) == mod {
-				deleted = true
-				mindex.Delete(key, nil, true /*lsm*/)
+				entry.deleted = true
+				mindex.Delete(entry.key, nil, true /*lsm*/)
 			}
-			//fmt.Printf("iterate %q %q %v %v\n", key, value, opaque, deleted)
-			return key, value, opaque, deleted, nil
+			//fmsg := "iterate %q %q %v %v\n"
+			//fmt.Printf(, entry.key, entry.value, opaque, deleted)
+			entry.err = nil
+			return entry
 		}
-		return nil, nil, 0, false, io.EOF
+		entry.key, entry.value = nil, nil
+		entry.seqno, entry.deleted, entry.err = 0, false, io.EOF
+		return entry
 	}
 }
 
@@ -369,4 +377,28 @@ func bubtpaths(npaths int) []string {
 		}
 	}
 	return paths
+}
+
+type indexentry struct {
+	key     []byte
+	value   []byte
+	seqno   uint64
+	deleted bool
+	err     error
+}
+
+func (entry *indexentry) ID() string {
+	return ""
+}
+
+func (entry *indexentry) Key() ([]byte, uint64, bool, error) {
+	return entry.key, entry.seqno, entry.deleted, entry.err
+}
+
+func (entry *indexentry) Value() []byte {
+	return entry.value
+}
+
+func (entry *indexentry) Valueref() (valuelen uint64, vpos int64) {
+	return 0, -1
 }

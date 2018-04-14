@@ -14,3 +14,5 @@ var conflicts = int64(0)
 var rollbacks = int64(0)
 var numcpus = runtime.GOMAXPROCS(-1)
 var lmdbmissingerr = "No matching key/data pair found"
+var badgconflict = "Transaction Conflict"
+var badgkeymissing = "Key not found"

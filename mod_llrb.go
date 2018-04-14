@@ -280,7 +280,7 @@ func (t *TestLLRB) lmdbvalidator(
 		now := time.Now()
 		index.Validate()
 		took := time.Since(now).Round(time.Second)
-		fmt.Printf("Took %v to validate index\n\n", took)
+		fmt.Printf("Took %v to validate index\n", took)
 
 		func() {
 			t.llrbrw.Lock()
@@ -301,7 +301,7 @@ func (t *TestLLRB) lmdbvalidator(
 		}
 	}()
 
-	tick := time.NewTicker(10 * time.Second)
+	tick := time.NewTicker(20 * time.Second)
 	for {
 		select {
 		case <-tick.C:
@@ -373,7 +373,7 @@ func (t *TestLLRB) badgvalidator(
 		}
 	}()
 
-	tick := time.NewTicker(10 * time.Second)
+	tick := time.NewTicker(20 * time.Second)
 	for {
 		select {
 		case <-tick.C:

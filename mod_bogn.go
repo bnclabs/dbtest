@@ -48,12 +48,10 @@ func testbogn() error {
 		panic(err)
 	}
 	index.Start()
-
 	// load index and reference with initial data.
 	dobognload(index, lmdbenv, lmdbdbi)
 	// test index and reference read / write
 	dobognrw(bognsetts, index, lmdbenv, lmdbdbi)
-
 	index.Close()
 
 	diskBognLmdb(bognname, lmdbpath, seedl, bognsetts)
@@ -127,7 +125,7 @@ func bognvalidator(
 		now := time.Now()
 		index.Validate()
 		took := time.Since(now).Round(time.Second)
-		fmt.Printf("Took %v to validate index\n\n", took)
+		fmt.Printf("Took %v to validate index\n", took)
 
 		func() {
 			bognrw.Lock()
@@ -691,17 +689,29 @@ func bognGet1(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *bogn.Bogn, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	bognval, seqno, del, ok := index.Get(key, value)
+	var bognval []byte
+	var seqno uint64
+	var del, ok bool
 
 	get := func(txn *lmdb.Txn) (err error) {
-		lmdbval, err := txn.Get(lmdbdbi, key)
-		if del == false && options.vallen > 0 {
-			if bytes.Compare(bognval, lmdbval) != 0 {
-				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, lmdbval, bognval)
+		var lmdbval []byte
+
+		bognval, seqno, del, ok = index.Get(key, value)
+
+		if lmdbval, err = txn.Get(lmdbdbi, key); err == nil {
+			if del == false && options.vallen > 0 {
+				if bytes.Compare(bognval, lmdbval) != 0 {
+					fmsg := "retry: expected %q, got %q"
+					return fmt.Errorf(fmsg, lmdbval, bognval)
+				}
 			}
+
+		} else if del && strings.Contains(err.Error(), lmdbmissingerr) {
+			return nil
+		} else if strings.Contains(err.Error(), lmdbmissingerr) {
+			return fmt.Errorf("retry: %v", err)
 		}
-		return nil
+		return err
 	}
 	trylmdbget(lmdbenv, 5000, get)
 
@@ -720,13 +730,24 @@ func bognGet2(
 		bogntxn = index.BeginTxn(0xC0FFEE)
 		bognval, _, del, ok = bogntxn.Get(key, value)
 
-		lmdbval, err := txn.Get(lmdbdbi, key)
-		if del == false && options.vallen > 0 {
-			if bytes.Compare(bognval, lmdbval) != 0 {
-				bogntxn.Abort()
-				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, lmdbval, bognval)
+		var lmdbval []byte
+
+		if lmdbval, err = txn.Get(lmdbdbi, key); err == nil {
+			if del == false && options.vallen > 0 {
+				if bytes.Compare(bognval, lmdbval) != 0 {
+					bogntxn.Abort()
+					fmsg := "retry: expected %q, got %q"
+					return fmt.Errorf(fmsg, lmdbval, bognval)
+				}
 			}
+		} else if del && strings.Contains(err.Error(), lmdbmissingerr) {
+			return nil
+		} else if strings.Contains(err.Error(), lmdbmissingerr) {
+			bogntxn.Abort()
+			return fmt.Errorf("retry: %v", err)
+		} else if err != nil {
+			bogntxn.Abort()
+			return err
 		}
 		return nil
 	}
@@ -762,13 +783,24 @@ func bognGet3(
 		view = index.View(0x1235)
 		bognval, _, del, ok = view.Get(key, value)
 
-		lmdbval, err := txn.Get(lmdbdbi, key)
-		if del == false && options.vallen > 0 {
-			if bytes.Compare(bognval, lmdbval) != 0 {
-				view.Abort()
-				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, lmdbval, bognval)
+		var lmdbval []byte
+
+		if lmdbval, err = txn.Get(lmdbdbi, key); err == nil {
+			if del == false && options.vallen > 0 {
+				if bytes.Compare(bognval, lmdbval) != 0 {
+					view.Abort()
+					fmsg := "retry: expected %q, got %q"
+					return fmt.Errorf(fmsg, lmdbval, bognval)
+				}
 			}
+		} else if del && strings.Contains(err.Error(), lmdbmissingerr) {
+			return nil
+		} else if strings.Contains(err.Error(), lmdbmissingerr) {
+			view.Abort()
+			return fmt.Errorf("retry: %v", err)
+		} else if err != nil {
+			view.Abort()
+			return err
 		}
 		return nil
 	}
@@ -1042,8 +1074,6 @@ func diskBognLmdb(name, lmdbpath string, seedl int64, bognsetts s.Settings) {
 
 	rnd := rand.New(rand.NewSource(seedl))
 	// update settings
-	memstores := []string{"mvcc", "llrb"}
-	bognsetts["memstore"] = memstores[rnd.Intn(len(memstores))]
 	_, _, freemem := getsysmem()
 	capacities := []uint64{freemem, freemem, 10000}
 	bognsetts["llrb.memcapacity"] = capacities[rnd.Intn(len(capacities))]

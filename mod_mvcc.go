@@ -51,6 +51,7 @@ func (t *TestMVCC) mvccwithlmdb() error {
 		return err
 	}
 	defer lmdbenv.Close()
+
 	// new mvcc instance.
 	mvccname, mvccsetts := "dbtest", llrb.Defaultsettings()
 	index := llrb.NewMVCC("dbtest", mvccsetts)
@@ -284,7 +285,7 @@ func (t *TestMVCC) lmdbvalidator(
 		now := time.Now()
 		index.Validate()
 		took := time.Since(now).Round(time.Second)
-		fmt.Printf("Took %v to validate index\n\n", took)
+		fmt.Printf("Took %v to validate index\n", took)
 
 		func() {
 			t.mvccrw.Lock()
@@ -1189,17 +1190,28 @@ func (t *TestMVCC) lmdbGet1(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *llrb.MVCC, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	mvccval, seqno, del, ok := index.Get(key, value)
+	var mvccval []byte
+	var seqno uint64
+	var del, ok bool
 
 	get := func(txn *lmdb.Txn) (err error) {
-		lmdbval, err := txn.Get(lmdbdbi, key)
-		if del == false && options.vallen > 0 {
-			if bytes.Compare(mvccval, lmdbval) != 0 {
-				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, lmdbval, mvccval)
+		var lmdbval []byte
+
+		mvccval, seqno, del, ok = index.Get(key, value)
+		if lmdbval, err = txn.Get(lmdbdbi, key); err == nil {
+			if del == false && options.vallen > 0 {
+				if bytes.Compare(mvccval, lmdbval) != 0 {
+					fmsg := "retry: expected %q, got %q"
+					return fmt.Errorf(fmsg, lmdbval, mvccval)
+				}
 			}
+
+		} else if del && strings.Contains(err.Error(), lmdbmissingerr) {
+			return nil
+		} else if strings.Contains(err.Error(), lmdbmissingerr) {
+			return fmt.Errorf("retry: %v", err)
 		}
-		return nil
+		return err
 	}
 	trylmdbget(lmdbenv, 5000, get)
 
@@ -1215,16 +1227,27 @@ func (t *TestMVCC) lmdbGet2(
 	var mvcctxn api.Transactor
 
 	get := func(txn *lmdb.Txn) (err error) {
+		var lmdbval []byte
+
 		mvcctxn = index.BeginTxn(0xC0FFEE)
 		mvccval, _, del, ok = mvcctxn.Get(key, value)
 
-		lmdbval, err := txn.Get(lmdbdbi, key)
-		if del == false && options.vallen > 0 {
-			if bytes.Compare(mvccval, lmdbval) != 0 {
-				mvcctxn.Abort()
-				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, lmdbval, mvccval)
+		if lmdbval, err = txn.Get(lmdbdbi, key); err == nil {
+			if del == false && options.vallen > 0 {
+				if bytes.Compare(mvccval, lmdbval) != 0 {
+					mvcctxn.Abort()
+					fmsg := "retry: expected %q, got %q"
+					return fmt.Errorf(fmsg, lmdbval, mvccval)
+				}
 			}
+		} else if del && strings.Contains(err.Error(), lmdbmissingerr) {
+			return nil
+		} else if strings.Contains(err.Error(), lmdbmissingerr) {
+			mvcctxn.Abort()
+			return fmt.Errorf("retry: %v", err)
+		} else if err != nil {
+			mvcctxn.Abort()
+			return err
 		}
 		return nil
 	}
@@ -1257,16 +1280,27 @@ func (t *TestMVCC) lmdbGet3(
 	var view api.Transactor
 
 	get := func(txn *lmdb.Txn) (err error) {
+		var lmdbval []byte
+
 		view = index.View(0x1235)
 		mvccval, _, del, ok = view.Get(key, value)
 
-		lmdbval, err := txn.Get(lmdbdbi, key)
-		if del == false && options.vallen > 0 {
-			if bytes.Compare(mvccval, lmdbval) != 0 {
-				view.Abort()
-				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, lmdbval, mvccval)
+		if lmdbval, err = txn.Get(lmdbdbi, key); err == nil {
+			if del == false && options.vallen > 0 {
+				if bytes.Compare(mvccval, lmdbval) != 0 {
+					view.Abort()
+					fmsg := "retry: expected %q, got %q"
+					return fmt.Errorf(fmsg, lmdbval, mvccval)
+				}
 			}
+		} else if del && strings.Contains(err.Error(), lmdbmissingerr) {
+			return nil
+		} else if strings.Contains(err.Error(), lmdbmissingerr) {
+			view.Abort()
+			return fmt.Errorf("retry: %v", err)
+		} else if err != nil {
+			view.Abort()
+			return err
 		}
 		return nil
 	}
@@ -1363,9 +1397,12 @@ func (t *TestMVCC) badgGet1(
 	badg *badger.DB,
 	index *llrb.MVCC, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	mvccval, seqno, del, ok := index.Get(key, value)
+	var mvccval []byte
+	var seqno uint64
+	var del, ok bool
 
 	get := func(txn *badger.Txn) error {
+		mvccval, seqno, del, ok = index.Get(key, value)
 		item, _ := txn.Get(key)
 		if del == false && options.vallen > 0 && item != nil {
 			badgval, _ := item.Value()

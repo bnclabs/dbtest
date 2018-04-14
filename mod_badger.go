@@ -121,9 +121,6 @@ func badgerload(badg *badger.DB, klen, vlen, loadn, seedl int64) error {
 	return nil
 }
 
-var badgconflict = "Transaction Conflict"
-var badgkeymissing = "Key not found"
-
 func badgerCreater(
 	badg *badger.DB, loadn, klen, vlen, seedc int64, wg *sync.WaitGroup) {
 
