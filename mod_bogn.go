@@ -966,7 +966,7 @@ func bognsettings(seed int) s.Settings {
 
 	setts := bogn.Defaultsettings()
 	setts["memstore"] = options.memstore
-	setts["flushperiod"] = int64(options.period)
+	setts["autocommit"] = int64(options.autocommit)
 	setts["flushratio"] = flushratios[rnd.Intn(10000)%len(flushratios)]
 	setts["bubt.mmap"] = []bool{true, false}[rnd.Intn(10000)%2]
 	msizes := []int64{4096, 8192, 12288}
@@ -1002,8 +1002,8 @@ func bognsettings(seed int) s.Settings {
 
 	a, b, c := setts["durable"], setts["dgm"], setts["workingset"]
 	fmt.Printf("durable:%v dgm:%v workingset:%v lsm:%v\n", a, b, c, options.lsm)
-	a, b = setts["flushratio"], setts["flushperiod"]
-	fmt.Printf("flushratio:%v flushperiod:%v\n", a, b)
+	a, b = setts["flushratio"], setts["autocommit"]
+	fmt.Printf("flushratio:%v autocommit:%v\n", a, b)
 	a, b = setts["compactratio"], setts["compactperiod"]
 	fmt.Printf("compactratio:%v compactperiod:%v\n", a, b)
 	a = setts["llrb.snapshottick"]
