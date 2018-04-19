@@ -758,12 +758,13 @@ func bognGet2(
 		if err != nil {
 			panic(err)
 		}
-		if ckey, cdel := cur.Key(); cdel != del {
-			panic(fmt.Errorf("expected %v, got %v", del, cdel))
-		} else if bytes.Compare(ckey, key) != 0 {
+		ckey, cdel := cur.Key()
+		if bytes.Compare(ckey, key) != 0 {
 			panic(fmt.Errorf("expected %q, got %q", key, ckey))
+		} else if cdel != del {
+			panic(fmt.Errorf("%q expected %v, got %v", key, del, cdel))
 		} else if cvalue := cur.Value(); bytes.Compare(cvalue, bognval) != 0 {
-			panic(fmt.Errorf("expected %q, got %q", bognval, cvalue))
+			panic(fmt.Errorf("%q expected %q, got %q", key, bognval, cvalue))
 		}
 	}
 	bogntxn.Abort()
