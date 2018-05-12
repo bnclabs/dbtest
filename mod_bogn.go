@@ -196,6 +196,7 @@ func bognCreater(
 
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
+		//fmt.Printf("create %q\n", key)
 		setidx := rnd.Intn(1000000) % len(bognsets)
 		refcas, _ := bognsets[setidx](index, key, value, oldvalue)
 		oldvalue, cas, del, ok := index.Get(key, oldvalue)
@@ -277,6 +278,7 @@ func bognUpdater(
 
 		opaque := atomic.AddUint64(&seqno, 1)
 		key, value = g(key, value, opaque)
+		//fmt.Printf("update %q\n", key)
 		setidx := rnd.Intn(1000000) % len(bognsets)
 		for i := 2; i >= 0; i-- {
 			refcas, _ := bognsets[setidx](index, key, value, oldvalue)
@@ -701,15 +703,18 @@ func bognGet1(
 		if lmdbval, err = txn.Get(lmdbdbi, key); err == nil {
 			if del == false && options.vallen > 0 {
 				if bytes.Compare(bognval, lmdbval) != 0 {
-					fmsg := "retry: expected %q, got %q"
-					return fmt.Errorf(fmsg, lmdbval, bognval)
+					fmsg := "retry: %q, expected %q, got %q"
+					return fmt.Errorf(fmsg, key, lmdbval, bognval)
 				}
 			}
-
-		} else if del && strings.Contains(err.Error(), lmdbmissingerr) {
-			return nil
-		} else if strings.Contains(err.Error(), lmdbmissingerr) {
-			return fmt.Errorf("retry: %v", err)
+		} else {
+			ok1 := del && strings.Contains(err.Error(), lmdbmissingerr)
+			ok2 := (!ok) && strings.Contains(err.Error(), lmdbmissingerr)
+			if ok1 || ok2 {
+				err = nil
+			} else if strings.Contains(err.Error(), lmdbmissingerr) {
+				err = fmt.Errorf("retry: %v", err)
+			}
 		}
 		return err
 	}
@@ -723,33 +728,36 @@ func bognGet2(
 	index *bogn.Bogn, key, value []byte) ([]byte, uint64, bool, bool) {
 
 	var bognval []byte
+	var seqno uint64
 	var del, ok bool
 	var bogntxn api.Transactor
 
 	get := func(txn *lmdb.Txn) (err error) {
 		bogntxn = index.BeginTxn(0xC0FFEE)
-		bognval, _, del, ok = bogntxn.Get(key, value)
+		bognval, seqno, del, ok = bogntxn.Get(key, value)
 
 		var lmdbval []byte
 
 		if lmdbval, err = txn.Get(lmdbdbi, key); err == nil {
 			if del == false && options.vallen > 0 {
 				if bytes.Compare(bognval, lmdbval) != 0 {
-					bogntxn.Abort()
 					fmsg := "retry: expected %q, got %q"
-					return fmt.Errorf(fmsg, lmdbval, bognval)
+					err = fmt.Errorf(fmsg, lmdbval, bognval)
 				}
 			}
-		} else if del && strings.Contains(err.Error(), lmdbmissingerr) {
-			return nil
-		} else if strings.Contains(err.Error(), lmdbmissingerr) {
-			bogntxn.Abort()
-			return fmt.Errorf("retry: %v", err)
-		} else if err != nil {
-			bogntxn.Abort()
-			return err
+		} else {
+			ok1 := del && strings.Contains(err.Error(), lmdbmissingerr)
+			ok2 := (!ok) && strings.Contains(err.Error(), lmdbmissingerr)
+			if ok1 || ok2 {
+				err = nil
+			} else if strings.Contains(err.Error(), lmdbmissingerr) {
+				err = fmt.Errorf("retry: %v", err)
+			}
 		}
-		return nil
+		if err != nil {
+			bogntxn.Abort()
+		}
+		return err
 	}
 	trylmdbget(lmdbenv, 5000, get)
 
@@ -769,7 +777,7 @@ func bognGet2(
 	}
 	bogntxn.Abort()
 
-	return bognval, 0, del, ok
+	return bognval, seqno, del, ok
 }
 
 func bognGet3(
@@ -777,33 +785,36 @@ func bognGet3(
 	index *bogn.Bogn, key, value []byte) ([]byte, uint64, bool, bool) {
 
 	var bognval []byte
+	var seqno uint64
 	var del, ok bool
 	var view api.Transactor
 
 	get := func(txn *lmdb.Txn) (err error) {
 		view = index.View(0x1235)
-		bognval, _, del, ok = view.Get(key, value)
+		bognval, seqno, del, ok = view.Get(key, value)
 
 		var lmdbval []byte
 
 		if lmdbval, err = txn.Get(lmdbdbi, key); err == nil {
 			if del == false && options.vallen > 0 {
 				if bytes.Compare(bognval, lmdbval) != 0 {
-					view.Abort()
 					fmsg := "retry: expected %q, got %q"
-					return fmt.Errorf(fmsg, lmdbval, bognval)
+					err = fmt.Errorf(fmsg, lmdbval, bognval)
 				}
 			}
-		} else if del && strings.Contains(err.Error(), lmdbmissingerr) {
-			return nil
-		} else if strings.Contains(err.Error(), lmdbmissingerr) {
-			view.Abort()
-			return fmt.Errorf("retry: %v", err)
-		} else if err != nil {
-			view.Abort()
-			return err
+		} else {
+			ok1 := del && strings.Contains(err.Error(), lmdbmissingerr)
+			ok2 := (!ok) && strings.Contains(err.Error(), lmdbmissingerr)
+			if ok1 || ok2 {
+				err = nil
+			} else if strings.Contains(err.Error(), lmdbmissingerr) {
+				err = fmt.Errorf("retry: %v", err)
+			}
 		}
-		return nil
+		if err != nil {
+			view.Abort()
+		}
+		return err
 	}
 	trylmdbget(lmdbenv, 5000, get)
 
@@ -822,7 +833,7 @@ func bognGet3(
 	}
 	view.Abort()
 
-	return bognval, 0, del, ok
+	return bognval, seqno, del, ok
 }
 
 var bognrngs = []func(index *bogn.Bogn, key, val []byte) int64{

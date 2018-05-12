@@ -1127,17 +1127,33 @@ func (t *TestLLRB) lmdbGet1(
 	lmdbenv *lmdb.Env, lmdbdbi lmdb.DBI,
 	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	llrbval, seqno, del, ok := index.Get(key, value)
+	var llrbval []byte
+	var seqno uint64
+	var del, ok bool
 
 	get := func(txn *lmdb.Txn) (err error) {
-		lmdbval, err := txn.Get(lmdbdbi, key)
-		if del == false && options.vallen > 0 {
-			if bytes.Compare(llrbval, lmdbval) != 0 {
-				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, lmdbval, llrbval)
+		var lmdbval []byte
+
+		llrbval, seqno, del, ok = index.Get(key, value)
+
+		if lmdbval, err = txn.Get(lmdbdbi, key); err == nil {
+			if del == false && options.vallen > 0 {
+				if bytes.Compare(llrbval, lmdbval) != 0 {
+					fmsg := "retry: expected %q, got %q"
+					return fmt.Errorf(fmsg, lmdbval, llrbval)
+				}
+			}
+
+		} else {
+			ok1 := del && strings.Contains(err.Error(), lmdbmissingerr)
+			ok2 := (!ok) && strings.Contains(err.Error(), lmdbmissingerr)
+			if ok1 || ok2 {
+				err = nil
+			} else if strings.Contains(err.Error(), lmdbmissingerr) {
+				err = fmt.Errorf("retry: %v", err)
 			}
 		}
-		return nil
+		return err
 	}
 	trylmdbget(lmdbenv, 5000, get)
 
@@ -1149,22 +1165,37 @@ func (t *TestLLRB) lmdbGet2(
 	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
 
 	var llrbval []byte
+	var seqno uint64
 	var del, ok bool
 	var llrbtxn api.Transactor
 
 	get := func(txn *lmdb.Txn) (err error) {
-		llrbtxn = index.BeginTxn(0xC0FFEE)
-		llrbval, _, del, ok = llrbtxn.Get(key, value)
+		var lmdbval []byte
 
-		lmdbval, err := txn.Get(lmdbdbi, key)
-		if del == false && options.vallen > 0 {
-			if bytes.Compare(llrbval, lmdbval) != 0 {
-				llrbtxn.Abort()
-				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, lmdbval, llrbval)
+		llrbtxn = index.BeginTxn(0xC0FFEE)
+		llrbval, seqno, del, ok = llrbtxn.Get(key, value)
+
+		if lmdbval, err = txn.Get(lmdbdbi, key); err == nil {
+			if del == false && options.vallen > 0 {
+				if bytes.Compare(llrbval, lmdbval) != 0 {
+					fmsg := "retry: expected %q, got %q"
+					err = fmt.Errorf(fmsg, lmdbval, llrbval)
+				}
+			}
+
+		} else {
+			ok1 := del && strings.Contains(err.Error(), lmdbmissingerr)
+			ok2 := (!ok) && strings.Contains(err.Error(), lmdbmissingerr)
+			if ok1 || ok2 {
+				err = nil
+			} else if strings.Contains(err.Error(), lmdbmissingerr) {
+				err = fmt.Errorf("retry: %v", err)
 			}
 		}
-		return nil
+		if err != nil {
+			llrbtxn.Abort()
+		}
+		return err
 	}
 	trylmdbget(lmdbenv, 5000, get)
 
@@ -1183,7 +1214,7 @@ func (t *TestLLRB) lmdbGet2(
 	}
 	llrbtxn.Abort()
 
-	return llrbval, 0, del, ok
+	return llrbval, seqno, del, ok
 }
 
 func (t *TestLLRB) lmdbGet3(
@@ -1191,22 +1222,36 @@ func (t *TestLLRB) lmdbGet3(
 	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
 
 	var llrbval []byte
+	var seqno uint64
 	var del, ok bool
 	var view api.Transactor
 
 	get := func(txn *lmdb.Txn) (err error) {
-		view = index.View(0x1235)
-		llrbval, _, del, ok = view.Get(key, value)
+		var lmdbval []byte
 
-		lmdbval, err := txn.Get(lmdbdbi, key)
-		if del == false && options.vallen > 0 {
-			if bytes.Compare(llrbval, lmdbval) != 0 {
-				view.Abort()
-				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, lmdbval, llrbval)
+		view = index.View(0x1235)
+		llrbval, seqno, del, ok = view.Get(key, value)
+
+		if lmdbval, err = txn.Get(lmdbdbi, key); err == nil {
+			if del == false && options.vallen > 0 {
+				if bytes.Compare(llrbval, lmdbval) != 0 {
+					fmsg := "retry: expected %q, got %q"
+					err = fmt.Errorf(fmsg, lmdbval, llrbval)
+				}
+			}
+		} else {
+			ok1 := del && strings.Contains(err.Error(), lmdbmissingerr)
+			ok2 := (!ok) && strings.Contains(err.Error(), lmdbmissingerr)
+			if ok1 || ok2 {
+				err = nil
+			} else if strings.Contains(err.Error(), lmdbmissingerr) {
+				err = fmt.Errorf("retry: %v", err)
 			}
 		}
-		return nil
+		if err != nil {
+			view.Abort()
+		}
+		return err
 	}
 	trylmdbget(lmdbenv, 5000, get)
 
@@ -1225,7 +1270,7 @@ func (t *TestLLRB) lmdbGet3(
 	}
 	view.Abort()
 
-	return llrbval, 0, del, ok
+	return llrbval, seqno, del, ok
 }
 
 func (t *TestLLRB) badgGetter(
@@ -1295,19 +1340,35 @@ func (t *TestLLRB) badgGet1(
 	badg *badger.DB,
 	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
 
-	llrbval, seqno, del, ok := index.Get(key, value)
+	var llrbval []byte
+	var seqno uint64
+	var del, ok bool
 
-	get := func(txn *badger.Txn) error {
-		item, _ := txn.Get(key)
-		if del == false && options.vallen > 0 && item != nil {
-			badgval, _ := item.Value()
-			if bytes.Compare(llrbval, badgval) != 0 {
-				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, badgval, llrbval)
+	get := func(txn *badger.Txn) (err error) {
+		var item *badger.Item
+
+		llrbval, seqno, del, ok = index.Get(key, value)
+
+		if item, err = txn.Get(key); err == nil {
+			if del == false && options.vallen > 0 && item != nil {
+				badgval, _ := item.Value()
+				if bytes.Compare(llrbval, badgval) != 0 {
+					fmsg := "retry: expected %q, got %q"
+					err = fmt.Errorf(fmsg, badgval, llrbval)
+				}
+			}
+		} else {
+			ok1 := del && strings.Contains(err.Error(), badgkeymissing)
+			ok2 := (!ok) && strings.Contains(err.Error(), badgkeymissing)
+			if ok1 || ok2 {
+				err = nil
+			} else if strings.Contains(err.Error(), badgkeymissing) {
+				err = fmt.Errorf("retry: %v", err)
 			}
 		}
-		return nil
+		return err
 	}
+
 	trybadgget(badg, 5000, get)
 
 	return llrbval, seqno, del, ok
@@ -1318,24 +1379,38 @@ func (t *TestLLRB) badgGet2(
 	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
 
 	var llrbval []byte
+	var seqno uint64
 	var del, ok bool
 	var llrbtxn api.Transactor
 
 	get := func(txn *badger.Txn) (err error) {
+		var item *badger.Item
 		llrbtxn = index.BeginTxn(0xC0FFEE)
-		llrbval, _, del, ok = llrbtxn.Get(key, value)
+		llrbval, seqno, del, ok = llrbtxn.Get(key, value)
 
-		item, err := txn.Get(key)
-		if del == false && options.vallen > 0 && item != nil {
-			badgval, _ := item.Value()
-			if bytes.Compare(llrbval, badgval) != 0 {
-				llrbtxn.Abort()
-				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, badgval, llrbval)
+		if item, err = txn.Get(key); err == nil {
+			if del == false && options.vallen > 0 && item != nil {
+				badgval, _ := item.Value()
+				if bytes.Compare(llrbval, badgval) != 0 {
+					fmsg := "retry: expected %q, got %q"
+					err = fmt.Errorf(fmsg, badgval, llrbval)
+				}
+			}
+		} else {
+			ok1 := del && strings.Contains(err.Error(), badgkeymissing)
+			ok2 := (!ok) && strings.Contains(err.Error(), badgkeymissing)
+			if ok1 || ok2 {
+				err = nil
+			} else if strings.Contains(err.Error(), badgkeymissing) {
+				err = fmt.Errorf("retry: %v", err)
 			}
 		}
-		return nil
+		if err != nil {
+			llrbtxn.Abort()
+		}
+		return err
 	}
+
 	trybadgget(badg, 5000, get)
 
 	if ok == true {
@@ -1353,7 +1428,7 @@ func (t *TestLLRB) badgGet2(
 	}
 	llrbtxn.Abort()
 
-	return llrbval, 0, del, ok
+	return llrbval, seqno, del, ok
 }
 
 func (t *TestLLRB) badgGet3(
@@ -1361,23 +1436,37 @@ func (t *TestLLRB) badgGet3(
 	index *llrb.LLRB, key, value []byte) ([]byte, uint64, bool, bool) {
 
 	var llrbval []byte
+	var seqno uint64
 	var del, ok bool
 	var view api.Transactor
 
 	get := func(txn *badger.Txn) (err error) {
-		view = index.View(0x1235)
-		llrbval, _, del, ok = view.Get(key, value)
+		var item *badger.Item
 
-		item, err := txn.Get(key)
-		if del == false && options.vallen > 0 && item != nil {
-			badgval, _ := item.Value()
-			if bytes.Compare(llrbval, badgval) != 0 {
-				view.Abort()
-				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, badgval, llrbval)
+		view = index.View(0x1235)
+		llrbval, seqno, del, ok = view.Get(key, value)
+
+		if item, err = txn.Get(key); err == nil {
+			if del == false && options.vallen > 0 && item != nil {
+				badgval, _ := item.Value()
+				if bytes.Compare(llrbval, badgval) != 0 {
+					fmsg := "retry: expected %q, got %q"
+					err = fmt.Errorf(fmsg, badgval, llrbval)
+				}
+			}
+		} else {
+			ok1 := del && strings.Contains(err.Error(), badgkeymissing)
+			ok2 := (!ok) && strings.Contains(err.Error(), badgkeymissing)
+			if ok1 || ok2 {
+				err = nil
+			} else if strings.Contains(err.Error(), badgkeymissing) {
+				err = fmt.Errorf("retry: %v", err)
 			}
 		}
-		return nil
+		if err != nil {
+			view.Abort()
+		}
+		return err
 	}
 	trybadgget(badg, 5000, get)
 
@@ -1396,7 +1485,7 @@ func (t *TestLLRB) badgGet3(
 	}
 	view.Abort()
 
-	return llrbval, 0, del, ok
+	return llrbval, seqno, del, ok
 }
 
 func (t *TestLLRB) Ranger(

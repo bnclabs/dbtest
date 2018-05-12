@@ -36,6 +36,7 @@ var options struct {
 	npaths     int
 	msize      int
 	log        string
+	loglevel   string
 }
 
 func optparse(args []string) {
@@ -65,7 +66,10 @@ func optparse(args []string) {
 	f.BoolVar(&options.randwidth, "randwidth", false, "generate keys and values of random width")
 	f.IntVar(&options.msize, "msize", 4096, "bubt option, m-block size")
 	f.StringVar(&options.log, "log", "", "llrb,mvcc,bubt,bogn")
+	f.StringVar(&options.loglevel, "loglevel", "warn", "info,warn,error,debug")
 	f.Parse(args)
+
+	loginit(options.loglevel)
 
 	if options.seed == 0 {
 		options.seed = int(time.Now().UnixNano())

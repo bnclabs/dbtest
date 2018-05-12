@@ -164,6 +164,7 @@ func lmdbLoad(env *lmdb.Env, dbi lmdb.DBI, seedl int64) error {
 		//	fmt.Println("load", string(key))
 		//}
 		for key != nil {
+			//fmt.Printf("lmdb load %q\n", key)
 			if err := txn.Put(dbi, key, value, 0); err != nil {
 				return err
 			}
@@ -527,7 +528,7 @@ func trylmdbget(lmdbenv *lmdb.Env, repeat int, get func(*lmdb.Txn) error) {
 		} else {
 			panic(err)
 		}
-		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
+		time.Sleep(time.Duration(rand.Intn(10)) * time.Millisecond)
 		runtime.Gosched()
 	}
 }

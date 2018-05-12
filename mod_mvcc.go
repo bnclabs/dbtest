@@ -1198,6 +1198,7 @@ func (t *TestMVCC) lmdbGet1(
 		var lmdbval []byte
 
 		mvccval, seqno, del, ok = index.Get(key, value)
+
 		if lmdbval, err = txn.Get(lmdbdbi, key); err == nil {
 			if del == false && options.vallen > 0 {
 				if bytes.Compare(mvccval, lmdbval) != 0 {
@@ -1206,10 +1207,14 @@ func (t *TestMVCC) lmdbGet1(
 				}
 			}
 
-		} else if del && strings.Contains(err.Error(), lmdbmissingerr) {
-			return nil
-		} else if strings.Contains(err.Error(), lmdbmissingerr) {
-			return fmt.Errorf("retry: %v", err)
+		} else {
+			ok1 := del && strings.Contains(err.Error(), lmdbmissingerr)
+			ok2 := (!ok) && strings.Contains(err.Error(), lmdbmissingerr)
+			if ok1 || ok2 {
+				err = nil
+			} else if strings.Contains(err.Error(), lmdbmissingerr) {
+				err = fmt.Errorf("retry: %v", err)
+			}
 		}
 		return err
 	}
@@ -1223,6 +1228,7 @@ func (t *TestMVCC) lmdbGet2(
 	index *llrb.MVCC, key, value []byte) ([]byte, uint64, bool, bool) {
 
 	var mvccval []byte
+	var seqno uint64
 	var del, ok bool
 	var mvcctxn api.Transactor
 
@@ -1230,26 +1236,29 @@ func (t *TestMVCC) lmdbGet2(
 		var lmdbval []byte
 
 		mvcctxn = index.BeginTxn(0xC0FFEE)
-		mvccval, _, del, ok = mvcctxn.Get(key, value)
+		mvccval, seqno, del, ok = mvcctxn.Get(key, value)
 
 		if lmdbval, err = txn.Get(lmdbdbi, key); err == nil {
 			if del == false && options.vallen > 0 {
 				if bytes.Compare(mvccval, lmdbval) != 0 {
-					mvcctxn.Abort()
 					fmsg := "retry: expected %q, got %q"
-					return fmt.Errorf(fmsg, lmdbval, mvccval)
+					err = fmt.Errorf(fmsg, lmdbval, mvccval)
 				}
 			}
-		} else if del && strings.Contains(err.Error(), lmdbmissingerr) {
-			return nil
-		} else if strings.Contains(err.Error(), lmdbmissingerr) {
-			mvcctxn.Abort()
-			return fmt.Errorf("retry: %v", err)
-		} else if err != nil {
-			mvcctxn.Abort()
-			return err
+
+		} else {
+			ok1 := del && strings.Contains(err.Error(), lmdbmissingerr)
+			ok2 := (!ok) && strings.Contains(err.Error(), lmdbmissingerr)
+			if ok1 || ok2 {
+				err = nil
+			} else if strings.Contains(err.Error(), lmdbmissingerr) {
+				err = fmt.Errorf("retry: %v", err)
+			}
 		}
-		return nil
+		if err != nil {
+			mvcctxn.Abort()
+		}
+		return err
 	}
 	trylmdbget(lmdbenv, 5000, get)
 
@@ -1276,6 +1285,7 @@ func (t *TestMVCC) lmdbGet3(
 	index *llrb.MVCC, key, value []byte) ([]byte, uint64, bool, bool) {
 
 	var mvccval []byte
+	var seqno uint64
 	var del, ok bool
 	var view api.Transactor
 
@@ -1283,26 +1293,28 @@ func (t *TestMVCC) lmdbGet3(
 		var lmdbval []byte
 
 		view = index.View(0x1235)
-		mvccval, _, del, ok = view.Get(key, value)
+		mvccval, seqno, del, ok = view.Get(key, value)
 
 		if lmdbval, err = txn.Get(lmdbdbi, key); err == nil {
 			if del == false && options.vallen > 0 {
 				if bytes.Compare(mvccval, lmdbval) != 0 {
-					view.Abort()
 					fmsg := "retry: expected %q, got %q"
-					return fmt.Errorf(fmsg, lmdbval, mvccval)
+					err = fmt.Errorf(fmsg, lmdbval, mvccval)
 				}
 			}
-		} else if del && strings.Contains(err.Error(), lmdbmissingerr) {
-			return nil
-		} else if strings.Contains(err.Error(), lmdbmissingerr) {
-			view.Abort()
-			return fmt.Errorf("retry: %v", err)
-		} else if err != nil {
-			view.Abort()
-			return err
+		} else {
+			ok1 := del && strings.Contains(err.Error(), lmdbmissingerr)
+			ok2 := (!ok) && strings.Contains(err.Error(), lmdbmissingerr)
+			if ok1 || ok2 {
+				err = nil
+			} else if strings.Contains(err.Error(), lmdbmissingerr) {
+				err = fmt.Errorf("retry: %v", err)
+			}
 		}
-		return nil
+		if err != nil {
+			view.Abort()
+		}
+		return err
 	}
 	trylmdbget(lmdbenv, 5000, get)
 
@@ -1401,17 +1413,28 @@ func (t *TestMVCC) badgGet1(
 	var seqno uint64
 	var del, ok bool
 
-	get := func(txn *badger.Txn) error {
+	get := func(txn *badger.Txn) (err error) {
+		var item *badger.Item
+
 		mvccval, seqno, del, ok = index.Get(key, value)
-		item, _ := txn.Get(key)
-		if del == false && options.vallen > 0 && item != nil {
-			badgval, _ := item.Value()
-			if bytes.Compare(mvccval, badgval) != 0 {
-				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, badgval, mvccval)
+		if item, err = txn.Get(key); err == nil {
+			if del == false && options.vallen > 0 && item != nil {
+				badgval, _ := item.Value()
+				if bytes.Compare(mvccval, badgval) != 0 {
+					fmsg := "retry: expected %q, got %q"
+					err = fmt.Errorf(fmsg, badgval, mvccval)
+				}
+			}
+		} else {
+			ok1 := del && strings.Contains(err.Error(), badgkeymissing)
+			ok2 := (!ok) && strings.Contains(err.Error(), badgkeymissing)
+			if ok1 || ok2 {
+				err = nil
+			} else if strings.Contains(err.Error(), badgkeymissing) {
+				err = fmt.Errorf("retry: %v", err)
 			}
 		}
-		return nil
+		return err
 	}
 	trybadgget(badg, 5000, get)
 
@@ -1423,23 +1446,37 @@ func (t *TestMVCC) badgGet2(
 	index *llrb.MVCC, key, value []byte) ([]byte, uint64, bool, bool) {
 
 	var mvccval []byte
+	var seqno uint64
 	var del, ok bool
 	var mvcctxn api.Transactor
 
 	get := func(txn *badger.Txn) (err error) {
-		mvcctxn = index.BeginTxn(0xC0FFEE)
-		mvccval, _, del, ok = mvcctxn.Get(key, value)
+		var item *badger.Item
 
-		item, err := txn.Get(key)
-		if del == false && options.vallen > 0 && item != nil {
-			badgval, _ := item.Value()
-			if bytes.Compare(mvccval, badgval) != 0 {
-				mvcctxn.Abort()
-				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, badgval, mvccval)
+		mvcctxn = index.BeginTxn(0xC0FFEE)
+		mvccval, seqno, del, ok = mvcctxn.Get(key, value)
+
+		if item, err = txn.Get(key); err == nil {
+			if del == false && options.vallen > 0 && item != nil {
+				badgval, _ := item.Value()
+				if bytes.Compare(mvccval, badgval) != 0 {
+					fmsg := "retry: expected %q, got %q"
+					err = fmt.Errorf(fmsg, badgval, mvccval)
+				}
+			}
+		} else {
+			ok1 := del && strings.Contains(err.Error(), badgkeymissing)
+			ok2 := (!ok) && strings.Contains(err.Error(), badgkeymissing)
+			if ok1 || ok2 {
+				err = nil
+			} else if strings.Contains(err.Error(), badgkeymissing) {
+				err = fmt.Errorf("retry: %v", err)
 			}
 		}
-		return nil
+		if err != nil {
+			mvcctxn.Abort()
+		}
+		return err
 	}
 	trybadgget(badg, 5000, get)
 
@@ -1458,7 +1495,7 @@ func (t *TestMVCC) badgGet2(
 	}
 	mvcctxn.Abort()
 
-	return mvccval, 0, del, ok
+	return mvccval, seqno, del, ok
 }
 
 func (t *TestMVCC) badgGet3(
@@ -1466,23 +1503,37 @@ func (t *TestMVCC) badgGet3(
 	index *llrb.MVCC, key, value []byte) ([]byte, uint64, bool, bool) {
 
 	var mvccval []byte
+	var seqno uint64
 	var del, ok bool
 	var view api.Transactor
 
 	get := func(txn *badger.Txn) (err error) {
-		view = index.View(0x1235)
-		mvccval, _, del, ok = view.Get(key, value)
+		var item *badger.Item
 
-		item, err := txn.Get(key)
-		if del == false && options.vallen > 0 && item != nil {
-			badgval, _ := item.Value()
-			if bytes.Compare(mvccval, badgval) != 0 {
-				view.Abort()
-				fmsg := "retry: expected %q, got %q"
-				return fmt.Errorf(fmsg, badgval, mvccval)
+		view = index.View(0x1235)
+		mvccval, seqno, del, ok = view.Get(key, value)
+
+		if item, err = txn.Get(key); err == nil {
+			if del == false && options.vallen > 0 && item != nil {
+				badgval, _ := item.Value()
+				if bytes.Compare(mvccval, badgval) != 0 {
+					fmsg := "retry: expected %q, got %q"
+					err = fmt.Errorf(fmsg, badgval, mvccval)
+				}
+			}
+		} else {
+			ok1 := del && strings.Contains(err.Error(), badgkeymissing)
+			ok2 := (!ok) && strings.Contains(err.Error(), badgkeymissing)
+			if ok1 || ok2 {
+				err = nil
+			} else if strings.Contains(err.Error(), badgkeymissing) {
+				err = fmt.Errorf("retry: %v", err)
 			}
 		}
-		return nil
+		if err != nil {
+			view.Abort()
+		}
+		return err
 	}
 	trybadgget(badg, 5000, get)
 
